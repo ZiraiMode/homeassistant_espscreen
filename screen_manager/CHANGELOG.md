@@ -1,3 +1,12 @@
+## Unreleased
+
+- **Waveshare ESP32-S3-Touch-LCD-4B: experimental audio configuration.** The board now includes its ES7210 microphone,
+  ES8311 speaker output and amplifier in the shared mono, 16 kHz half-duplex audio graph, with a Home Assistant
+  Media Player and Volume/Microphone in Extras. Microphone starts off without a saved choice and restores subsequent
+  choices. This is software mute, not a physical disconnect or cancellation of an ongoing answer. The profile requires
+  ESPHome 2026.9.0 and provides the hardware capabilities needed by the optional Voice assistant plugin without
+  installing it by default. Cold-start power, sound, capture and end-to-end Assist still require testing on a real board.
+
 ## 0.4.88 (firmware 0.56.0)
 
 - **A screen that runs well no longer shows an old failed update.** An update that failed (for instance because another

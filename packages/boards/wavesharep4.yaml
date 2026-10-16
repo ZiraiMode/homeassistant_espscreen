@@ -23,6 +23,7 @@ packages:
   snapshot: !include ../features/snapshot.yaml
   # The speaker and the microphone as the screen's audio (features/audio.yaml), and its amplifier following the sound
   # (features/audio-amplifier.yaml): its hardware below.
+  audio_codec: !include ../hardware/audio-es8311.yaml
   audio: !include ../features/audio.yaml
   audio_amplifier: !include ../features/audio-amplifier.yaml
   audio_half_duplex: !include ../features/audio-half-duplex.yaml
@@ -126,16 +127,6 @@ audio_adc:
     sample_rate: 16000
     bits_per_sample: 16bit
     mic_gain: 30db
-
-audio_dac:
-  - platform: es8311
-    id: ts_audio_dac
-    i2c_id: touch_bus
-    address: 0x18
-    sample_rate: 16000
-    bits_per_sample: 16bit
-    use_mclk: true
-    use_microphone: false
 
 switch:
   - platform: gpio

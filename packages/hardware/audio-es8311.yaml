@@ -1,0 +1,11 @@
+# ES8311 on the touch I2C bus, clocked by MCLK: the Waveshare S3 4B and P4 86 panel.
+# Both boards use the shared 16 kHz half-duplex audio graph; their I2S pins stay in the board files.
+audio_dac:
+  - platform: es8311
+    id: ts_audio_dac
+    i2c_id: touch_bus
+    address: 0x18
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    use_mclk: true
+    use_microphone: false
