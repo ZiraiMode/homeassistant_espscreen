@@ -1,5 +1,8 @@
 ## Unreleased
 
+- **Editor: wake model lists fit narrow screens.** Long model names and manifest URLs wrap within the plugin's
+  setup card instead of widening it and pushing catalogue or Remove buttons off-screen.
+
 - **Voice assistant: choose the wake models installed on each screen.** A plugin's build settings can offer a
   catalogue and public microWakeWord JSON URLs. First installation requires an explicit model choice, with no stock
   models preselected. Apply batches the chosen set into one screen update; existing installations keep their models

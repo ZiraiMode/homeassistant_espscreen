@@ -1666,7 +1666,7 @@ section.advanced code { font-size: 11.5px; }
 }
 
 /* What a plugin asks for before it goes on: a key, a pin, a name, its optional parts. */
-.pd-setup { display: grid; gap: 12px; }
+.pd-setup { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 /* A plugin's settings on a screen (plugin API 0.6): a group per kind of change, each with what a change does. */
 .pd-settings { gap: 12px; }
 .pd-group { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }

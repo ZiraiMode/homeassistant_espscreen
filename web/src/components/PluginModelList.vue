@@ -83,13 +83,15 @@ function remove(source?: string) {
 </template>
 
 <style scoped>
-.plugin-models { margin-block: 1rem; }
+.plugin-models { min-width: 0; margin-block: 1rem; overflow-wrap: anywhere; }
 h4 { margin-block: 0 .5rem; }
 ul { list-style: none; padding: 0; }
 .model-catalogue li, .model-desired li { display: flex; gap: .75rem; align-items: center; justify-content: space-between; margin-block: .5rem; }
-.model-desired span { min-width: 0; }
-.model-desired small { display: block; overflow-wrap: anywhere; }
-.model-url input { width: 100%; }
+.model-catalogue span, .model-desired span { flex: 1; min-width: 0; }
+.model-catalogue button, .model-desired button { flex: none; }
+.model-desired small { display: block; }
+.model-url { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.model-url input { width: 100%; min-width: 0; }
 .model-url button { margin-top: .5rem; }
 .model-installed, .model-failed { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: .5rem; }
 </style>
