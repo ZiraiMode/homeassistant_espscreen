@@ -160,7 +160,7 @@ Everything a person sets for a plugin on a screen is in one place: the plugin's 
 |---|---|---|---|
 | On this screen | The manifest's `settings`: ESPHome entities of the plugin's `plugin.yaml` on the screen's device | Takes effect at once, through Home Assistant (`set_setting`) | `PluginSettings.vue`, `Plugins.settings_for` |
 | For every screen | `inputs` with `scope: all` | A secret stays in the app (`plugin_secrets.json`); a value goes into each screen's next build | `PluginSetup.vue only="shared"` |
-| When building | `inputs` with `scope: screen` and `parts` | Builds the screen again: "Save and build" is the same `apply` as adding, and only lights up when something differs from the build (`setupChanged`) | `PluginSetup.vue only="screen"` |
+| When building | `inputs` with `scope: screen`, `parts`, and structured `build_settings` | Builds the screen again only after an explicit apply; model changes use "Apply and update screen" | `PluginSetup.vue only="screen"` |
 
 **How a setting finds its entity.** A setting's `key` is the entity's name in `plugin.yaml` as ESPHome writes it in an
 id: "Tap sound" is `tap_sound` (`Plugins.object_id`, ESPHome's `snake_case` then `sanitize`). The app looks in Home
@@ -173,6 +173,44 @@ before plugin API 0.6, so older plugins keep working.
 five options, a dropdown from six on, at most 48), a text (`text.set_value`, within the entity's min and max length,
 hidden when its mode is password) and a button (`button.press`). A button's `status` names a text sensor the row shows
 beside it, read again a few times after a press, so a test can say how it went. A status is only shown, never set.
+
+### Wake models installed through the editor
+
+A plugin can declare a `build_settings` entry of kind `micro_wake_word_models`. Its `target` names its
+microWakeWord component, and `feature_step_size` states the frontend timing in milliseconds. `catalogue` holds
+optional `{id, label, url}` presets, with labels translated through the plugin's app texts. These presets are
+available choices, not installed models. The plugin package leaves `models: []`; the app supplies the chosen list.
+`legacy_installed` lists catalogue IDs already compiled by older versions, only for preserving existing installations.
+
+On first installation, choose at least one preset or paste a public HTTPS microWakeWord JSON manifest URL.
+Nothing is selected automatically. The editor keeps additions and removals as a draft; Install or
+Apply and update screen builds and installs the whole chosen set once. Afterwards, removing every model is
+allowed and leaves manual activation available. A same-origin update keeps the installed set. Switching to a
+different plugin origin requires an explicit model choice again.
+
+Changing the installed set needs a firmware build. Switching the live Wake phrase control between installed
+models does not. The voice plugin keeps that selection by model identity, not list position; removing the selected
+model leaves voice activation unselected until an explicit choice. Readding it does not resume listening by itself.
+The stock English Hey Jarvis is not a Russian Jarvis model.
+
+The app checks public destinations for both manifest and binary, refuses redirects and private hosts, and bounds
+each JSON to 64 KiB, each binary to 2 MiB, and a set to 16 models and 8 MiB. Real ESPHome validation and board memory
+still decide whether a compatible set fits. All compiled model binaries use flash; disabling a model can release its
+inference arena but does not remove its compiled bytes.
+
+Models are kept as immutable snapshots under `.tessera-models/` beside the profile. Screen-file ZIP exports include
+the referenced manifests and binaries, so a saved configuration does not depend on the original model host.
+The app must manage the profile and know the screen's network address. Conflicting manual microWakeWord
+models, VAD or component IDs in profile/Override YAML must be moved or adopted explicitly, never overwritten.
+
+Build records distinguish requested and confirmed installed model sets. A queued build captures its root profile,
+plugins sidecar and exact plugin revisions for all its steps. A failed update restores the prior desired configuration
+and retains the failed request for retry; it does not reflash the device. After a restart without installation evidence,
+the app marks a pending model change interrupted rather than treating an unchanged plugin version as proof of installation.
+A profile conflict or unwritable sidecar during recovery blocks builds for that screen and appears in its plugin
+settings; it does not prevent the app from starting or other screens from building. Resolve the reported conflict or
+permissions and apply the plugin settings again.
+
 
 ## What a plugin can add
 

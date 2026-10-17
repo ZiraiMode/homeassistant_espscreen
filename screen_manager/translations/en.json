@@ -907,7 +907,13 @@
         "like_off": "Likes are off: a newer version of the app keeps them.",
         "like_failed": "The like did not go out. Try again in a moment.",
         "misfit_built_in": "{name} brings what this board has itself.",
-        "offline": "The app does not know where {screen} is on the network yet. Switch it on, wait until it shows as online, then try again."
+        "offline": "The app does not know where {screen} is on the network yet. Switch it on, wait until it shows as online, then try again.",
+        "models_required": "Choose at least one wake model before installing.",
+        "models_profile": "Wake models need a screen profile managed by this app and a known network address.",
+        "models_conflict": "Only one plugin on a screen can manage microWakeWord models.",
+        "models_changed": "The plugin configuration changed. Review it and apply again.",
+        "models_invalid": "The wake model could not be added: {reason}",
+        "recovery": "Plugin configuration for {file} could not be recovered. Resolve the conflict or file permissions, then apply the plugin settings again: {reason}"
       },
       "extras": {
         "request": "This change of an extra is not possible on this screen."
@@ -3455,6 +3461,28 @@
         "part_kb": "{kb} KB more",
         "secret_set": "Set. Fill in a new one to replace it.",
         "part_needs": "Needs a {what} on the screen"
+      },
+      "models": {
+        "available": "Available models",
+        "add_to_screen": "Add to screen",
+        "added": "Added",
+        "installed": "Installed models",
+        "url": "Public JSON manifest URL",
+        "add": "Add",
+        "duplicate": "This model URL is already in the list.",
+        "limit": "Choose at most 16 wake models.",
+        "desired": "Models for the next update",
+        "remove": "Remove",
+        "remove_all": "Remove all",
+        "manual_only": "Manual activation only",
+        "required": "Choose at least one wake model before installing.",
+        "managed_required": "Choose a Tessera-managed screen profile before managing wake models.",
+        "apply_note": "Editing this list does not download or install models. Apply once to build and update the screen.",
+        "unconfirmed": "Installed model state unconfirmed",
+        "pending": "This model update is pending. The installed list changes only after a successful installation.",
+        "failed": "Models from the failed update",
+        "apply": "Apply and update screen",
+        "saving": "Checking and saving…"
       },
       "readme": {
         "title": "Read me"

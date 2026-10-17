@@ -16,6 +16,7 @@ import os
 import tempfile
 import threading
 import time
+from copy import deepcopy
 from pathlib import Path
 
 VERSION = 1
@@ -61,7 +62,7 @@ class PluginStore:
 
     def of(self, inbox):
         """The plugins of one screen, a list of records (copies)."""
-        return [dict(item) for item in (self.screens.get(inbox) or {}).get('plugins', [])]
+        return deepcopy((self.screens.get(inbox) or {}).get('plugins', []))
 
     def get(self, inbox, plugin):
         return next((item for item in self.of(inbox) if item.get('id') == plugin), None)
@@ -69,11 +70,20 @@ class PluginStore:
     def put(self, inbox, record):
         """Add or replace the record of `record['id']` on this screen."""
         with self.lock:
-            entry = self.screens.setdefault(inbox, {'plugins': []})
+            before = self.screens.get(inbox)
+            entry = dict(before or {'plugins': []})
             items = [item for item in entry['plugins'] if item.get('id') != record['id']]
-            items.append(dict(record, changed=int(time.time())))
+            items.append(dict(deepcopy(record), changed=int(time.time())))
             entry['plugins'] = sorted(items, key=lambda item: item['id'])
-            self.save()
+            self.screens[inbox] = entry
+            try:
+                self.save()
+            except BaseException:
+                if before is None:
+                    self.screens.pop(inbox, None)
+                else:
+                    self.screens[inbox] = before
+                raise
 
     def set_state(self, inbox, plugin, state, reason=None):
         with self.lock:

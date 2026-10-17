@@ -1,5 +1,11 @@
 ## Unreleased
 
+- **Voice assistant: choose the wake models installed on each screen.** A plugin's build settings can offer a
+  catalogue and public microWakeWord JSON URLs. First installation requires an explicit model choice, with no stock
+  models preselected. Apply batches the chosen set into one screen update; existing installations keep their models
+  until changed. Switching between installed models remains immediate. Immutable model snapshots travel with
+  downloaded screen files, and queued builds retain their exact configuration across build and install steps.
+
 - **Waveshare ESP32-S3-Touch-LCD-4B: experimental audio configuration.** The board now includes its ES7210 microphone,
   ES8311 speaker output and amplifier in the shared mono, 16 kHz half-duplex audio graph, with a Home Assistant
   Media Player and Volume/Microphone in Extras. Microphone starts off without a saved choice and restores subsequent

@@ -12,6 +12,7 @@ import re
 import shutil
 import signal
 import time
+import uuid
 import yaml
 import zipfile
 import build_cache
@@ -160,6 +161,9 @@ class Firmware:
         self.language = None  # the language builds speak: the manager's Settings -> Language & region (app 0.2.90)
         # The app's build line (build_queue.BuildQueue), which alone starts a job here; None on its own (a test).
         self.builds = None
+        # A sidecar that could not be recovered from the persistent plugin store must never feed a build.
+        # Plugins.reconcile/apply clears an entry only after the corresponding configuration is synchronized.
+        self.plugin_recovery = {}
 
     def profiles(self):
         if not self.root.exists(): return []
@@ -667,32 +671,37 @@ packages:
         return profile, path
 
     def _atomic_write(self, path, text):
-        temporary = path.with_name(path.name + '.tmp')
-        with temporary.open('w', encoding='utf8') as handle:
-            os.chmod(temporary, 0o600)
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(path)
+        temporary = path.with_name(f'{path.name}.{uuid.uuid4().hex}.tmp')
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf8') as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _ensure_override_include(self, profile):
         """Attach an existing profile to its sidecar without reformatting user YAML."""
         return self._ensure_include(profile, 'local_overrides', profile.stem + self.OVERRIDE_SUFFIX)
 
-    def _ensure_include(self, profile, key, filename):
-        """`key: !include filename` at the end of the profile's top-level `packages:`, written once."""
+    def _include_text(self, profile, key, filename):
+        """Return the attached profile text without touching either file."""
         text = profile.read_text()
-        if re.search(rf'(?m)^\s*{key}:\s*!include\s+{re.escape(filename)}\s*$', text):
-            return False
-        if re.search(rf'(?m)^\s*{key}\s*:', text):
-            raise ValueError(t('addon.errors.plugins.other_include' if key == 'tessera_plugins' else 'addon.errors.firmware.other_include'))
         try:
-            parsed = yaml.load(text, Loader=LenientLoader)
+            parsed = yaml.compose(text)
         except yaml.YAMLError as error:
             raise ValueError(t('addon.errors.firmware.profile_invalid')) from error
-        packages = parsed.get('packages') if isinstance(parsed, dict) else None
-        if not isinstance(packages, dict):
+        packages = [value for name, value in parsed.value if name.value == 'packages'] if isinstance(parsed, yaml.MappingNode) else []
+        if len(packages) != 1 or not isinstance(packages[0], yaml.MappingNode):
             raise ValueError(t('addon.errors.firmware.no_packages'))
+        existing = [value for name, value in packages[0].value if name.value == key]
+        if existing:
+            if (len(existing) == 1 and isinstance(existing[0], yaml.ScalarNode)
+                    and existing[0].tag == '!include' and existing[0].value == filename):
+                return text
+            raise ValueError(t('addon.errors.plugins.other_include' if key == 'tessera_plugins' else 'addon.errors.firmware.other_include'))
         match = re.search(r'(?m)^packages:\s*\n', text)
         if not match:
             raise ValueError(t('addon.errors.firmware.no_packages'))
@@ -704,7 +713,13 @@ packages:
         while end > match.end() and text[:end].endswith('\n\n'):
             end -= 1
         addition = f'  {key}: !include {filename}\n'
-        self._atomic_write(profile, text[:end] + addition + text[end:])
+        return text[:end] + addition + text[end:]
+
+    def _ensure_include(self, profile, key, filename):
+        text = self._include_text(profile, key, filename)
+        if text == profile.read_text():
+            return False
+        self._atomic_write(profile, text)
         self._names.pop(profile.name, None)
         return True
 
@@ -747,8 +762,15 @@ packages:
         profile, override = self._override_path(name)
         text = profile.read_text()
         local = override.read_text() if override.exists() else '{}\n'
-        plugins = self.root / (profile.stem + self.PLUGINS_SUFFIX)
+        _, plugins = self._plugins_path(name)
         extra = [(plugins.name, plugins.read_text())] if plugins.is_file() and not plugins.is_symlink() else []
+        if extra:
+            parsed = self._validate_plugins(extra[0][1])
+            models = (parsed.get('micro_wake_word') or {}).get('models', [])
+            if models:
+                from plugin_models import snapshot_files
+                entries = [{'snapshot': model['model'].split('/')[1]} for model in models]
+                extra.extend(snapshot_files(self.root, entries).items())
         wanted = sorted(set(re.findall(r'!secret\s+([A-Za-z0-9_]+)', text + '\n' + local)))
         secrets = {}
         path = self.root / 'secrets.yaml'
@@ -780,6 +802,12 @@ packages:
     def save_override(self, name, content):
         profile, path = self._override_path(name)
         content = self._validate_override(content)
+        _, plugins = self._plugins_path(name)
+        if plugins.exists():
+            managed = self._validate_plugins(plugins.read_text()).get('micro_wake_word')
+            if managed:
+                self._check_model_ownership(profile, managed['id'], override_content=content)
+        self._include_text(profile, 'local_overrides', path.name)
         # A substitution the screen's own YAML sets wins over the override's, which is a package: a choice made under
         # New screen (a CYD's display controller, app 0.2.129) would quietly beat the same line here. Said instead.
         mine = (yaml.load(content, Loader=LenientLoader) or {}).get('substitutions')
@@ -807,20 +835,213 @@ packages:
         return {'file': profile.name, 'plugins_file': path.name, 'attached': attached, 'exists': path.exists(),
                 'content': path.read_text() if path.exists() else ''}
 
-    def save_plugins(self, name, content):
-        """Write the screen's plugins file (plugins.sidecar), then attach it: never an include of a missing file."""
-        profile, path = self._plugins_path(name)
+    def _validate_plugins(self, content):
+        """Accept only the generated sidecar shape, never general owner YAML."""
         if not isinstance(content, str) or len(content.encode()) > self.PLUGINS_LIMIT:
             raise ValueError(t('addon.errors.plugins.file'))
         try:
             parsed = yaml.load(content, Loader=LenientLoader)
         except yaml.YAMLError as error:
             raise ValueError(t('addon.errors.plugins.file')) from error
-        if not isinstance(parsed, dict) or set(parsed) - {'packages', 'external_components'}:
+        if not isinstance(parsed, dict) or set(parsed) - {'packages', 'external_components', 'micro_wake_word'}:
             raise ValueError(t('addon.errors.plugins.file'))
+        if 'micro_wake_word' in parsed:
+            wake = parsed['micro_wake_word']
+            if (not isinstance(wake, dict) or set(wake) != {'id', 'models'}
+                    or not isinstance(wake['id'], str) or not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', wake['id'])
+                    or not isinstance(wake['models'], list) or len(wake['models']) > 16):
+                raise ValueError(t('addon.errors.plugins.file'))
+            ids = set()
+            for model in wake['models']:
+                if (not isinstance(model, dict) or set(model) != {'id', 'model'}
+                        or not isinstance(model['id'], str) or not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', model['id'])
+                        or not isinstance(model['model'], str)
+                        or not re.fullmatch(r'\.tessera-models/[0-9a-f]{64}/manifest\.json', model['model'])
+                        or model['id'] in ids):
+                    raise ValueError(t('addon.errors.plugins.file'))
+                ids.add(model['id'])
+        return parsed
+
+    def _check_model_ownership(self, profile, target, *, override_content=None):
+        """Inspect local includes with strict bounds; diagnostics never quote owner content."""
+        visited, total, count, nodes = set(), 0, 0, 0
+        override = self.root / (profile.stem + self.OVERRIDE_SUFFIX)
+        sidecar = self.root / (profile.stem + self.PLUGINS_SUFFIX)
+
+        def conflict(path, section):
+            raise ValueError(t('addon.errors.firmware.sections_managed', names=f'{path.name}: {section}'))
+
+        def mapping(node, path, depth=0, ancestors=()):
+            """Resolve YAML merge keys with native precedence, without constructing arbitrary objects."""
+            nonlocal nodes
+            if not isinstance(node, yaml.MappingNode):
+                return {}
+            nodes += 1
+            if depth > 64 or nodes > 4096 or id(node) in ancestors:
+                conflict(path, 'YAML merge/alias cycle or limit')
+            ancestors = (*ancestors, id(node))
+            merged, explicit = {}, {}
+            for key, value in node.value:
+                if not isinstance(key, yaml.ScalarNode):
+                    conflict(path, 'YAML mapping key')
+                if key.tag != 'tag:yaml.org,2002:merge':
+                    explicit[key.value] = value
+                    continue
+                sources = value.value if isinstance(value, yaml.SequenceNode) else [value]
+                # YAML's first mapping in a merge sequence wins; explicit keys win over every merge.
+                for source in reversed(sources):
+                    if not isinstance(source, yaml.MappingNode):
+                        conflict(path, 'YAML merge')
+                    merged.update(mapping(source, path, depth + 1, ancestors))
+            merged.update(explicit)
+            return merged
+
+        def inspect(path, depth=0):
+            nonlocal total, count
+            if path == sidecar:
+                return
+            if (depth > 16 or path.is_symlink() or not path.is_relative_to(self.root)
+                    or path.resolve() != path or count >= 64):
+                conflict(path, 'packages/include')
+            if path in visited:
+                conflict(path, 'packages/include cycle')
+            visited.add(path)
+            count += 1
+            try:
+                if path != override or override_content is None:
+                    if path.stat().st_size > 1024 * 1024 - total:
+                        conflict(path, 'packages/include')
+                text = override_content if path == override and override_content is not None else path.read_text()
+                total += len(text.encode())
+                if total > 1024 * 1024:
+                    conflict(path, 'packages/include')
+                node = yaml.compose(text)
+            except (OSError, UnicodeError, yaml.YAMLError) as error:
+                conflict(path, 'packages/include')
+            inspect_config(node, path, depth)
+            visited.remove(path)
+
+        def inspect_config(node, path, depth):
+            nonlocal nodes
+            nodes += 1
+            if depth > 16 or nodes > 4096:
+                conflict(path, 'packages/include')
+            if not isinstance(node, yaml.MappingNode):
+                if node is not None:
+                    inspect_node(node, path, depth)
+                return
+            if node.tag.startswith('!'):
+                conflict(path, 'packages/include')
+            root = mapping(node, path)
+            if 'micro_wake_word' in root:
+                wake = mapping(root['micro_wake_word'], path)
+                if not wake:
+                    conflict(path, 'micro_wake_word')
+                for key in ('models', 'vad'):
+                    if key in wake:
+                        conflict(path, 'micro_wake_word.' + key)
+                if 'id' in wake and (not isinstance(wake['id'], yaml.ScalarNode) or wake['id'].value != target):
+                    conflict(path, 'micro_wake_word.id')
+            if 'packages' in root and not isinstance(root['packages'], yaml.MappingNode):
+                conflict(path, 'packages')
+            packages = mapping(root.get('packages'), path)
+            for key, package in packages.items():
+                if key == 'tessera_plugins':
+                    if not (isinstance(package, yaml.ScalarNode) and package.tag == '!include' and package.value == sidecar.name):
+                        conflict(path, 'packages.' + key)
+                    continue
+                if isinstance(package, yaml.MappingNode):
+                    if package.tag.startswith('!'):
+                        conflict(path, 'packages.' + key)
+                    remote = mapping(package, path).get('url')
+                    if remote is not None:
+                        if not isinstance(remote, yaml.ScalarNode) or remote.value.removesuffix('.git') != REPO.removesuffix('.git'):
+                            conflict(path, 'packages.' + key)
+                        continue
+                    inspect_config(package, path, depth + 1)
+                elif isinstance(package, yaml.ScalarNode) and package.tag == '!include':
+                    inspect_node(package, path, depth)
+                else:
+                    conflict(path, 'packages.' + key)
+            # Includes can occur outside packages too (for example a whole micro_wake_word block).
+            for key, value in root.items():
+                if key != 'packages':
+                    inspect_node(value, path, depth)
+
+        def inspect_node(node, path, depth):
+            nonlocal nodes
+            nodes += 1
+            if depth > 64 or nodes > 4096:
+                conflict(path, 'include')
+            if node.tag.startswith('!include') and not isinstance(node, yaml.ScalarNode):
+                conflict(path, 'include')
+            if isinstance(node, yaml.ScalarNode) and node.tag.startswith('!include'):
+                if node.tag != '!include' or not node.value or Path(node.value).is_absolute():
+                    conflict(path, 'include')
+                child = path.parent / node.value
+                if '..' in Path(node.value).parts:
+                    conflict(path, 'include')
+                inspect(child, depth + 1)
+            elif isinstance(node, yaml.MappingNode):
+                for _, value in node.value:
+                    inspect_node(value, path, depth + 1)
+            elif isinstance(node, yaml.SequenceNode):
+                for value in node.value:
+                    inspect_node(value, path, depth + 1)
+
+        inspect(profile)
+        if override_content is not None or override.exists():
+            inspect(override)
+
+    def preflight_plugins(self, name, content):
+        """All managed-include/ownership checks happen before the first write."""
+        profile, path = self._plugins_path(name)
+        parsed = self._validate_plugins(content)
+        self._include_text(profile, 'tessera_plugins', path.name)
+        if 'micro_wake_word' in parsed:
+            self._check_model_ownership(profile, parsed['micro_wake_word']['id'])
+        return parsed
+
+    def save_plugins(self, name, content):
+        self.preflight_plugins(name, content)
+        profile, path = self._plugins_path(name)
         self._atomic_write(path, content)
         self._ensure_include(profile, 'tessera_plugins', path.name)
         return self.plugins_file(profile.name)
+
+    def capture_inputs(self, profile):
+        """Freeze the CLI root and managed sidecar, keeping all relative includes local."""
+        text = profile.read_text()
+        sidecar = self.root / (profile.stem + self.PLUGINS_SUFFIX)
+        paths = []
+        try:
+            node = yaml.compose(text)
+            packages = next((value for key, value in node.value if key.value == 'packages'), None) if isinstance(node, yaml.MappingNode) else None
+            include = next((value for key, value in packages.value if key.value == 'tessera_plugins'), None) if isinstance(packages, yaml.MappingNode) else None
+            if include is not None:
+                if not (isinstance(include, yaml.ScalarNode) and include.tag == '!include' and include.value == sidecar.name):
+                    raise ValueError(t('addon.errors.plugins.other_include'))
+                if sidecar.is_symlink() or not sidecar.is_file():
+                    raise ValueError(t('addon.errors.plugins.file'))
+                content = sidecar.read_text()
+                self._validate_plugins(content)
+                frozen_sidecar = self.root / f'.tessera-{uuid.uuid4().hex}.plugins.yaml'
+                paths.append(frozen_sidecar)
+                self._atomic_write(frozen_sidecar, content)
+                text = text[:include.start_mark.index] + '!include ' + frozen_sidecar.name + text[include.end_mark.index:]
+            frozen_root = self.root / f'.tessera-{uuid.uuid4().hex}.plugins.yaml'
+            paths.append(frozen_root)
+            self._atomic_write(frozen_root, text)
+            return {'profile': frozen_root, 'paths': paths}
+        except BaseException:
+            self.release_inputs({'paths': paths})
+            raise
+
+    @staticmethod
+    def release_inputs(snapshot):
+        for path in snapshot.get('paths', []):
+            path.unlink(missing_ok=True)
+        snapshot['paths'] = []
 
     def install(self, data):
         """Profile plus, when a USB port is chosen, the build and flash in one go. With the target
@@ -928,6 +1149,8 @@ packages:
         if not isinstance(data, dict):
             raise ValueError(t('addon.errors.firmware.choose_profile'))
         profile = self.profile(data.get('file'))
+        if profile.name in self.plugin_recovery:
+            raise ValueError(self.plugin_recovery[profile.name])
         action = data.get('action')
         # 'widen' sends the partition table of the profile's last build (app 0.4.56), nothing else.
         if action not in ('validate','build','install','download','widen'): raise ValueError(t('addon.errors.firmware.unknown_action'))
@@ -947,9 +1170,11 @@ packages:
         """Run one job now. Only the build line (build_queue) calls this in the app: it waits for the slot to be free."""
         if self.task and not self.task.done(): raise ValueError(t('addon.errors.firmware.busy'))
         profile, action, target = self.check(data)
-        # What a build writes into the screen's own YAML first. Not for a table, which goes with the build that was
-        # made, and not for a bridge, which this app wrote whole.
-        managed = action not in ('validate', 'widen') and not profile.name.endswith(self.BRIDGE_SUFFIX)
+        build = getattr(self.builds, 'running', None)
+        snapshot = build.input_snapshots.get(profile.name) if build else None
+        # Later steps reuse the first step's inputs, not newly requested settings.
+        managed = (snapshot is None and action not in ('validate', 'widen')
+                   and not profile.name.endswith(self.BRIDGE_SUFFIX))
         # Every build speaks the language of Settings -> Language & region, also for a profile made or changed since
         # that language was set (app 0.2.90).
         if managed and callable(self.language):
@@ -1003,6 +1228,22 @@ packages:
         override_file = self.root / (profile.stem + self.OVERRIDE_SUFFIX)
         if override_file.exists() and not override_file.is_symlink():
             collect(yaml.compose(override_file.read_text()))
+        owned_snapshot = None
+        if action != 'widen' and snapshot is None:
+            snapshot = self.capture_inputs(profile)
+            snapshot['secret_values'] = set(self._secret_values)
+            if build:
+                build.input_snapshots[profile.name] = snapshot
+                if profile.name == build.file and build.screen:
+                    plugins = getattr(self.builds.manager, 'plugins', None)
+                    records = deepcopy(plugins.store.of(build.screen)) if plugins else []
+                    build.plugin_records[build.screen] = records
+                    build.plugin_revisions[build.screen] = {
+                        record['id']: record.get('build_revision') for record in records}
+            else:
+                owned_snapshot = snapshot
+        if snapshot:
+            self._secret_values.update(snapshot.get('secret_values', ()))
         if action != 'widen':
             self.images.pop(profile.name, None)  # until this job succeeds, the old image may no longer match the profile
         self.logs.clear()
@@ -1010,7 +1251,17 @@ packages:
             self.logs.append(f'{profile.name}: the Wi-Fi fallback hotspot and captive portal are left out on this board '
                              '(no room in its update slot); a screen whose Wi-Fi changed is installed again over USB.')
         self.job={'file':profile.name,'action':action,'target':target,'state':'running','started':time.time()}
-        self.task=asyncio.create_task(self.run(profile,action,target))
+        self.task=asyncio.create_task(self.run(profile, action, target,
+                                             input_profile=snapshot['profile'] if snapshot else None,
+                                             owned_snapshot=owned_snapshot))
+        if owned_snapshot:
+            # Cancellation before the coroutine's first instruction never enters run's finally.
+            job = self.job
+            def completed(task):
+                if task.cancelled() and job['state'] == 'running':
+                    job.update(state='interrupted', finished=time.time())
+                self.release_inputs(owned_snapshot)
+            self.task.add_done_callback(completed)
         return dict(self.job)
 
     def _changed(self):
@@ -1108,7 +1359,7 @@ packages:
             code = await self.process.wait()
             return code, killed or (stage == 'compile' and build_memory.killed_exit(code))
 
-    async def run(self, profile, action, target):
+    async def run(self, profile, action, target, *, input_profile=None, owned_snapshot=None):
         env = self.build_env(profile)
         try:
             if action not in ('validate', 'widen'):
@@ -1117,7 +1368,7 @@ packages:
             stages = ['config'] if action=='validate' else ['upload'] if action=='widen' else ['compile'] + (['upload'] if action=='install' else [])
             memory = None
             for stage in stages:
-                cmd=['esphome']+(['--quiet'] if stage=='config' else [])+[stage]+(['--partition-table'] if action=='widen' else [])+[str(profile)]
+                cmd=['esphome']+(['--quiet'] if stage=='config' else [])+[stage]+(['--partition-table'] if action=='widen' else [])+[str(input_profile or profile)]
                 if stage=='upload': cmd += ['--device',target]
                 self.job['stage']=stage
                 self._changed()
@@ -1156,9 +1407,13 @@ packages:
         except Exception as error:
             self.job['state']='failed';self.logs.append(self.redact(str(error)))
         finally:
-            if self.process and self.process.returncode is None:
-                os.killpg(self.process.pid,signal.SIGTERM)
-                try: await asyncio.wait_for(self.process.wait(),10)
-                except TimeoutError: os.killpg(self.process.pid,signal.SIGKILL);await self.process.wait()
-            self.process=None
-            self.job['finished']=time.time()
+            try:
+                if self.process and self.process.returncode is None:
+                    os.killpg(self.process.pid,signal.SIGTERM)
+                    try: await asyncio.wait_for(self.process.wait(),10)
+                    except TimeoutError: os.killpg(self.process.pid,signal.SIGKILL);await self.process.wait()
+            finally:
+                self.process=None
+                self.job['finished']=time.time()
+                if owned_snapshot:
+                    self.release_inputs(owned_snapshot)

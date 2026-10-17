@@ -1017,6 +1017,8 @@ class Manager:
             if self.layouts:
                 self.region.clock, self.region.pinned = '24', True
             self.region.save()
+        # Recover interrupted model changes from the persistent plugin records before any build can start.
+        self.plugins.reconcile()
 
     @property
     def layouts(self):
