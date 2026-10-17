@@ -9,8 +9,8 @@ import { getJson, send } from "../api";
 import { t } from "../i18n";
 import { askConfirm } from "../composables/useConfirm";
 import { boardTitle } from "../model/boards";
-import { attachLine, barItemView, barTypesOf, choiceKey, compareUrl, copyBuildValues, fit, isTest, modelSources, nodeOf, ownYaml, pluginDefaults, pluginTileId, testPlugin,
-  text, tileTypesOf, type AppFit, type BuildValues, type Installed, type ModelEntry, type Plugin, type PluginBuildSetting, type PluginTileOption, type Texts } from "../model/plugins";
+import { attachLine, barItemView, barTypesOf, choiceKey, compareUrl, copyBuildValues, fit, isTest, modelKey, modelSources, nodeOf, ownYaml, pluginDefaults, pluginTileId, testPlugin,
+  text, tileTypesOf, type AppFit, type BuildValues, type Installed, type ModelEntry, type Plugin, type PluginBuildSetting, type PluginTileOption, type ResolvedModel, type Texts } from "../model/plugins";
 import type { Screen } from "../types";
 import { useBuildsStore } from "./builds";
 import { useInventoryStore } from "./inventory";
@@ -221,14 +221,45 @@ export const usePluginsStore = defineStore("plugins", () => {
   }
   const buildKey = (plugin: Plugin) => `${plugin.id}|${plugin.origin || plugin.source || "index"}`;
   const buildDraft = (screen: Screen, plugin: Plugin) => buildValues.value[screen.node || screen.id]?.[buildKey(plugin)];
+  // Invalidates an in-flight import even when Cancel returns to an identical list.
+  const modelEdits = new Map<string, number>();
+  const modelEditKey = (screen: Screen, plugin: Plugin) => JSON.stringify([screen.node || screen.id, buildKey(plugin)]);
+  function touchModels(screen: Screen, plugin: Plugin) {
+    const key = modelEditKey(screen, plugin);
+    modelEdits.set(key, (modelEdits.get(key) || 0) + 1);
+  }
   const buildValuesOn = (screen: Screen, plugin: Plugin): BuildValues =>
     copyBuildValues({ ...(!otherOrigin(screen, plugin) ? installedOn(screen, plugin.id)?.build_values : {}), ...buildDraft(screen, plugin) });
   const modelsOn = (screen: Screen, plugin: Plugin, setting: PluginBuildSetting): ModelEntry[] =>
     buildValuesOn(screen, plugin)[setting.id] || [];
   function setModels(screen: Screen, plugin: Plugin, setting: PluginBuildSetting, models: ModelEntry[]) {
+    touchModels(screen, plugin);
     const node = screen.node || screen.id;
     ((buildValues.value[node] ||= {})[buildKey(plugin)] ||= {})[setting.id] = models.map((model) => ({ ...model }));
     delete setupErrors.value[screen.id]?.[plugin.id];
+  }
+  async function importModel(screen: Screen, plugin: Plugin, setting: PluginBuildSetting, manifest: File, model: File, signal?: AbortSignal) {
+    if (manifest.size > 64 * 1024 || model.size > 2 * 1024 * 1024) throw new Error(t("editor.plugins.models.upload_size"));
+    if (modelsOn(screen, plugin, setting).length >= 16) throw new Error(t("editor.plugins.models.limit"));
+    const key = modelEditKey(screen, plugin);
+    const revision = modelEdits.get(key);
+    const before = JSON.stringify(modelSources(buildValuesOn(screen, plugin)));
+    const form = new FormData();
+    form.append("manifest", manifest);
+    form.append("model", model);
+    const result = await send<ResolvedModel>(
+      `screens/${encodeURIComponent(screen.id)}/plugins/${encodeURIComponent(plugin.id)}/models/${encodeURIComponent(setting.id)}/import?source=${plugin.source || "index"}`,
+      "POST", form, { signal });
+    if (signal?.aborted || revision !== modelEdits.get(key) || submittingOn(screen, plugin.id)
+      || before !== JSON.stringify(modelSources(buildValuesOn(screen, plugin)))) {
+      throw new Error(t("editor.plugins.models.upload_changed"));
+    }
+    const current = modelsOn(screen, plugin, setting);
+    if (current.some((entry) => modelKey(entry) === modelKey(result) || entry.id === result.id)) {
+      throw new Error(t("editor.plugins.models.duplicate"));
+    }
+    if (current.length >= 16) throw new Error(t("editor.plugins.models.limit"));
+    setModels(screen, plugin, setting, [...current, result]);
   }
   const modelChoiceRequired = (screen: Screen, plugin: Plugin, setting: PluginBuildSetting) =>
     (!installedOn(screen, plugin.id) || installedOn(screen, plugin.id)?.state === "failed" || otherOrigin(screen, plugin))
@@ -394,6 +425,7 @@ export const usePluginsStore = defineStore("plugins", () => {
   // What was filled in for a plugin on a screen, once the add-on has it: the build's own values show from then on, and a
   // secret, which never comes back, no longer counts as a change.
   function forgetDrafts(screen: Screen, plugin: Plugin) {
+    touchModels(screen, plugin);
     const node = screen.node || screen.id;
     delete values.value[node]?.[plugin.id];
     delete parts.value[node]?.[plugin.id];
@@ -439,6 +471,7 @@ export const usePluginsStore = defineStore("plugins", () => {
     const have = installedOn(screen, plugin.id);
     const failed = have?.failed_update?.build_values ?? (have?.state === "failed" ? have.build_values : undefined);
     if (failed) {
+      touchModels(screen, plugin);
       const node = screen.node || screen.id;
       (buildValues.value[node] ||= {})[buildKey(plugin)] = copyBuildValues(failed);
     }
@@ -628,7 +661,7 @@ export const usePluginsStore = defineStore("plugins", () => {
       isSetAside, isTakingOff, trayPlan, trayAlong, trayReady, setAsideKb, removalPlan, newsFrom, compareFor, screenLine,
       buildValuesOn, modelsOn, modelChoiceRequired, setupError, submittingOn, changeReady, retryAvailable,
     }),
-    reloadPlugins, loadPlugins, setParts, setValue, setModels, markAttached, copyAttach, chooseProvider, like, forgetDrafts,
+    reloadPlugins, loadPlugins, setParts, setValue, setModels, importModel, markAttached, copyAttach, chooseProvider, like, forgetDrafts,
     addPlugin, retryPlugin, rebuildTest, updateAll, setAside, takeOut, toggleSetAside, installTray, setAsideRemoval, switchPlugin, setSecret, start,
   };
 });

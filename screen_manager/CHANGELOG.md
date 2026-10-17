@@ -1,5 +1,9 @@
 ## Unreleased
 
+- **Wake models: import private files from the editor.** Add a microWakeWord JSON manifest and its TFLite file from
+  your computer without publishing either file. Upload only adds a draft; Apply builds the chosen set once.
+  Existing models and Wake phrase selections are preserved, and identical uploads keep the same model identity.
+
 - **Waveshare 4B: record while the wake sound plays.** Separate native I2S controllers now use one shared clock
   source for simultaneous recording and playback, instead of stopping the microphone for every sound. The Voice
   assistant plugin starts capture before its cue and keeps wake inference warm on full-duplex boards, removing the

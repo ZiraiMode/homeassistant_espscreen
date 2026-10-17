@@ -186,8 +186,10 @@ optional `{id, label, url}` presets, with labels translated through the plugin's
 available choices, not installed models. The plugin package leaves `models: []`; the app supplies the chosen list.
 `legacy_installed` lists catalogue IDs already compiled by older versions, only for preserving existing installations.
 
-On first installation, choose at least one preset or paste a public HTTPS microWakeWord JSON manifest URL.
-Nothing is selected automatically. The editor keeps additions and removals as a draft; Install or
+On first installation, choose at least one preset, paste a public HTTPS microWakeWord JSON manifest URL, or use
+**Add from computer** with a JSON manifest and its matching TFLite file. Nothing is selected automatically.
+File upload validates and stores a private model in Home Assistant and adds it to the editor's draft, without building
+or changing the installed models. Public URL additions stay unfetched until Apply. The editor keeps removals as a draft too.
 Apply and update screen builds and installs the whole chosen set once. Afterwards, removing every model is
 allowed and leaves manual activation available. A same-origin update keeps the installed set. Switching to a
 different plugin origin requires an explicit model choice again.
@@ -204,6 +206,11 @@ inference arena but does not remove its compiled bytes.
 
 Models are kept as immutable snapshots under `.tessera-models/` beside the profile. Screen-file ZIP exports include
 the referenced manifests and binaries, so a saved configuration does not depend on the original model host.
+Private uploads use the same verified snapshots. A separate local registry assigns an opaque upload token and stable
+model ID; browser requests cannot choose snapshot paths or hashes. Import never follows the manifest's binary URL,
+and uploaded filenames are not filesystem paths. Reimporting the same pair preserves its identity. Private models
+are not published to GitHub, but installing them copies them into the screen's firmware, and screen-file ZIP exports
+contain their files. Treat those exports and firmware images as private too.
 The app must manage the profile and know the screen's network address. Conflicting manual microWakeWord
 models, VAD or component IDs in profile/Override YAML must be moved or adopted explicitly, never overwritten.
 The root profile's `packages.display` may point to an owner-selected GitHub fork. It must name exactly one known

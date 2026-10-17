@@ -1125,6 +1125,30 @@ class Plugins:
             raise ValueError(t('addon.errors.plugins.unknown', id=item['id']))
         return entry
 
+    def model_import_setting(self, inbox, plugin_id, setting_id, source):
+        """Validate the destination before reading or persisting a private upload."""
+        screen = self.manager.screen(inbox)
+        if screen is None:
+            raise ValueError(t('addon.errors.not_paired'))
+        if source not in ('folder', 'index', 'branch', 'link'):
+            raise ValueError(t('addon.errors.plugins.request'))
+        entry = self._entry_asked({'id': plugin_id, 'source': source})
+        spec = next((s for s in entry.manifest.get('build_settings') or []
+                     if s['id'] == setting_id and s['kind'] == 'micro_wake_word_models'), None)
+        if spec is None:
+            raise ValueError(t('addon.errors.plugins.request'))
+        reason = self.fits(entry, screen, deep=False)
+        if reason:
+            raise ValueError(self._refusal(reason, entry, 'en')['error'])
+        return spec
+
+    def import_model(self, inbox, plugin_id, setting_id, source, manifest, model):
+        spec = self.model_import_setting(inbox, plugin_id, setting_id, source)
+        try:
+            return plugin_models.import_model(spec, manifest, model, self.manager.firmware.root)
+        except plugin_models.ModelError as error:
+            raise ValueError(t('addon.errors.plugins.models_invalid', reason=str(error))) from error
+
     def _plan(self, screen, body, language='en'):
         """What a change of one screen's plugins comes to (plan() says it to the editor, apply() carries it out).
 
@@ -1274,9 +1298,9 @@ class Plugins:
             if key in supplied:
                 requested = supplied[key]
             elif key in saved:
-                requested = [{'id': m['id'], 'url': m['url']} for m in saved[key]]
+                requested = [plugin_models.model_source(m) for m in saved[key]]
             elif legacy and key in legacy:
-                requested = [{'id': m['id'], 'url': m['url']} for m in legacy[key]]
+                requested = [plugin_models.model_source(m) for m in legacy[key]]
             else:
                 raise ValueError(t('addon.errors.plugins.models_required'))
             installed = baseline and (key in (baseline.get('build_values') or {}) or legacy)
@@ -1293,7 +1317,7 @@ class Plugins:
                 trusted.extend((failed.get('build_values') or {}).get(key) or [])
             if legacy:
                 trusted.extend(legacy.get(key) or [])
-            normalized = plugin_models.validate_requested(spec, requested, trusted)
+            normalized = plugin_models.validate_requested(spec, requested, trusted, root=self.manager.firmware.root)
             out.append((spec, normalized, deepcopy(trusted)))
         return out
 

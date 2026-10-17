@@ -1,4 +1,4 @@
-import { flushPromises, mount } from "@vue/test-utils";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import PluginDetail from "../src/components/PluginDetail.vue";
 import PluginModelList from "../src/components/PluginModelList.vue";
@@ -33,6 +33,18 @@ const desk = { ...hall, id: "desk", node: "desk", name: "Desk" };
 const alisa = { id: "ww_alisa", url: "https://models.example/alisa.json", label: "Алиса", snapshot: "a".repeat(64), model_bytes: 32, feature_step_size: 10 };
 const record = (more: Partial<Installed> = {}): Installed => ({ id: voice.id, version: voice.version, source: "index", origin: voice.origin,
   state: "active", build_values: { wake_models: [alisa] }, installed_build_values: { wake_models: [alisa] }, build_confirmed: true, ...more });
+const uploaded = { id: "ww_local", upload: "opaque-private-token", label: "Synthetic wake", snapshot: "b".repeat(64), model_bytes: 32, feature_step_size: 10 };
+const importRoute = "POST screens/:id/plugins/:plugin/models/:setting/import";
+async function chooseFiles(view: VueWrapper, manifestSize = 2, binarySize = 16) {
+  const manifest = new File([new Uint8Array(manifestSize)], "synthetic.json", { type: "application/json" });
+  const model = new File([new Uint8Array(binarySize)], "synthetic.tflite");
+  for (const [selector, file] of [["[data-model-manifest]", manifest], ["[data-model-binary]", model]] as const) {
+    const input = view.get(selector);
+    Object.defineProperty(input.element, "files", { configurable: true, value: [file] });
+    await input.trigger("change");
+  }
+  return { manifest, model };
+}
 
 function setup(have: Installed[] = [], screens: Screen[] = [hall]) {
   const plugins = usePluginsStore();
@@ -169,6 +181,127 @@ describe("wake model GUI", () => {
     expect(view.find("[data-model-required]").exists()).toBe(false);
     expect(view.findAll(".model-desired li")).toHaveLength(0);
     expect(view.get("[data-installed-models]").text()).toContain(i18n.global.t("editor.plugins.models.manual_only"));
+  });
+
+  it("requires both local files and enables first Install only after an accepted upload", async () => {
+    const { plugins, api } = setup();
+    api.on(importRoute, uploaded);
+    const view = mount(PluginDetail, { props: { plugin: voice, screen: hall } });
+    await flushPromises();
+    expect(view.get("[data-upload-model]").attributes("disabled")).toBeDefined();
+    expect(view.get("#plugin-install").attributes("disabled")).toBeDefined();
+    await chooseFiles(view);
+    expect(view.get("#plugin-install").attributes("disabled")).toBeDefined();
+    await view.get("[data-upload-model]").trigger("click");
+    await flushPromises();
+    expect(view.get("#plugin-install").attributes("disabled")).toBeUndefined();
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([uploaded]);
+    expect(api.count("POST screens/:id/plugins")).toBe(0);
+    await view.get("[data-remove-model]").trigger("click");
+    expect(view.get("#plugin-install").attributes("disabled")).toBeDefined();
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([]);
+  });
+
+  it("uploads two files only on request, shows the private label, and applies both source kinds once", async () => {
+    const { plugins, api } = setup([record()]);
+    api.on(importRoute, uploaded);
+    const view = mount(PluginDetail, { props: { plugin: voice, screen: hall } });
+    const files = await chooseFiles(view);
+    expect(api.count(importRoute)).toBe(0);
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([alisa]);
+    const held = api.defer(importRoute);
+    await view.get("[data-upload-model]").trigger("click");
+    expect(view.get("[data-upload-model]").attributes("disabled")).toBeDefined();
+    expect(view.get("[data-upload-model]").text()).toBe(i18n.global.t("editor.plugins.models.uploading"));
+    const request = api.asked(importRoute)[0];
+    expect(request.query.get("source")).toBe("index");
+    expect(request.body).toBeInstanceOf(FormData);
+    expect([...request.body.keys()]).toEqual(["manifest", "model"]);
+    expect(request.body.get("manifest").name).toBe(files.manifest.name);
+    expect(request.body.get("model").size).toBe(files.model.size);
+    held.resolve();
+    await flushPromises();
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([alisa, uploaded]);
+    expect(api.count("POST screens/:id/plugins")).toBe(0);
+    expect(view.get(".model-desired").text()).toContain(uploaded.label);
+    expect(view.get(".model-desired").text()).toContain(i18n.global.t("editor.plugins.models.uploaded"));
+    expect(view.text()).not.toContain(uploaded.upload);
+    expect(view.text()).not.toContain(uploaded.snapshot);
+    expect(view.text()).not.toContain("undefined");
+    expect(view.get("[data-upload-model]").attributes("disabled")).toBeDefined();
+    expect(view.get("[data-installed-models]").text()).not.toContain(uploaded.label);
+    await view.get("#plugin-settings-save").trigger("click");
+    await flushPromises();
+    expect(api.count("POST screens/:id/plugins")).toBe(1);
+    expect(api.asked("POST screens/:id/plugins")[0].body.add[0].build_values).toEqual({
+      wake_models: [{ id: alisa.id, url: alisa.url }, { id: uploaded.id, upload: uploaded.upload }],
+    });
+  });
+
+  it("keeps files and model drafts after import errors and rejects a repeated imported pair", async () => {
+    const { plugins, api } = setup([record()]);
+    api.on(importRoute, failure(400, "Incompatible feature step"));
+    const view = mount(PluginModelList, { props: { plugin: voice, screen: hall, setting } });
+    await chooseFiles(view);
+    await view.get("[data-upload-model]").trigger("click");
+    await flushPromises();
+    expect(view.get("[data-upload-error]").text()).toBe("Incompatible feature step");
+    expect(view.get("[data-upload-model]").attributes("disabled")).toBeUndefined();
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([alisa]);
+    api.on(importRoute, uploaded);
+    await view.get("[data-upload-model]").trigger("click");
+    await flushPromises();
+    await chooseFiles(view);
+    await view.get("[data-upload-model]").trigger("click");
+    await flushPromises();
+    expect(view.get("[data-upload-error]").text()).toBe(i18n.global.t("editor.plugins.models.duplicate"));
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([alisa, uploaded]);
+    expect(view.get("[data-upload-model]").attributes("disabled")).toBeUndefined();
+    await view.get(`[data-remove-model="${uploaded.id}"]`).trigger("click");
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([alisa]);
+    expect(plugins.setupChanged(hall, voice)).toBe(false);
+    expect(api.count("POST screens/:id/plugins")).toBe(0);
+  });
+
+  it.each([[65537, 16], [2, 2097153]])("refuses oversized files before upload (%i, %i)", async (jsonSize, modelSize) => {
+    const { api } = setup();
+    const view = mount(PluginModelList, { props: { plugin: voice, screen: hall, setting } });
+    await chooseFiles(view, jsonSize, modelSize);
+    expect(view.get("[data-upload-error]").text()).toBe(i18n.global.t("editor.plugins.models.upload_size"));
+    expect(view.get("[data-upload-model]").attributes("disabled")).toBeDefined();
+    expect(api.count(importRoute)).toBe(0);
+  });
+
+  it("accepts exact file limits, but not a seventeenth model", async () => {
+    const { plugins, api } = setup();
+    api.on(importRoute, uploaded);
+    const view = mount(PluginModelList, { props: { plugin: voice, screen: hall, setting } });
+    await chooseFiles(view, 65536, 2097152);
+    expect(view.find("[data-upload-error]").exists()).toBe(false);
+    await view.get("[data-upload-model]").trigger("click");
+    await flushPromises();
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([uploaded]);
+    plugins.setModels(hall, voice, setting, Array.from({ length: 16 }, (_, i) => ({ url: `https://models.example/${i}.json` })));
+    await chooseFiles(view);
+    expect(view.get("[data-upload-model]").attributes("disabled")).toBeDefined();
+    expect(api.count(importRoute)).toBe(1);
+  });
+
+  it.each(["remove", "cancel", "unmount"])("does not resurrect a draft after %s during import", async (action) => {
+    const { plugins, api } = setup([record()]);
+    api.on(importRoute, uploaded);
+    const held = api.defer(importRoute);
+    const view = mount(PluginModelList, { props: { plugin: voice, screen: hall, setting } });
+    await chooseFiles(view);
+    await view.get("[data-upload-model]").trigger("click");
+    if (action === "remove") await view.get("[data-remove-model]").trigger("click");
+    else if (action === "cancel") await view.get("[data-cancel-models]").trigger("click");
+    else view.unmount();
+    held.resolve();
+    await flushPromises();
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual(action === "remove" ? [] : [alisa]);
+    expect(api.count("POST screens/:id/plugins")).toBe(0);
+    if (action === "remove") expect(view.get("[data-upload-error]").text()).toBe(i18n.global.t("editor.plugins.models.upload_changed"));
   });
 });
 

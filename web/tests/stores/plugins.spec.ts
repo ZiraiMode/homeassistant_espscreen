@@ -228,6 +228,50 @@ describe("structured model drafts", () => {
   };
   const alisa = { id: "ww_alisa", url: "https://models.example/alisa.json", label: "Алиса", snapshot: "a".repeat(64), model_bytes: 32, feature_step_size: 10 };
   const voice = plugin("voice", { origin: "github.com/maker/models", build_settings: [setting] });
+  const local = { id: "ww_local", upload: "synthetic-token", label: "Local wake", snapshot: "b".repeat(64), model_bytes: 32, feature_step_size: 10 };
+
+  it("preserves imported entries on normal updates and compares their source identity without display metadata", async () => {
+    const { api, plugins } = await loaded([voice], { hall: [installed("voice", {
+      origin: voice.origin, build_values: { wake_models: [alisa, local] }, build_confirmed: true,
+    })] });
+    plugins.setModels(hall, voice, setting, [alisa, { ...local, label: "Different display text" }]);
+    expect(plugins.setupChanged(hall, voice)).toBe(false);
+    plugins.setModels(hall, voice, setting, [alisa, { ...local, upload: "another-token" }]);
+    expect(plugins.setupChanged(hall, voice)).toBe(true);
+    plugins.forgetDrafts(hall, voice);
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([alisa, local]);
+    await plugins.addPlugin([hall], voice);
+    expect(api.asked("POST screens/:id/plugins")[0].body.add[0].build_values).toEqual({
+      wake_models: [{ id: alisa.id, url: alisa.url }, { id: local.id, upload: local.upload }],
+    });
+  });
+
+  it("retries the failed uploaded source rather than a URL or the installed list", async () => {
+    const { api, plugins } = await loaded([voice], { hall: [installed("voice", {
+      origin: voice.origin, build_values: { wake_models: [alisa] },
+      failed_update: { version: voice.version, build_values: { wake_models: [alisa, local] }, reason: "Build failed" },
+    })] });
+    api.on("POST screens/:id/plugins", failure(400, "Retry refused"));
+    await plugins.retryPlugin(hall, voice);
+    expect(api.asked("POST screens/:id/plugins")[0].body.add[0].build_values).toEqual({
+      wake_models: [{ id: alisa.id, url: alisa.url }, { id: local.id, upload: local.upload }],
+    });
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([alisa, local]);
+  });
+
+  it("rejects an import after external Cancel even when the source list returns to the same value", async () => {
+    const { api, plugins } = await loaded([voice], { hall: [installed("voice", { origin: voice.origin, build_values: { wake_models: [alisa] } })] });
+    const route = "POST screens/:id/plugins/:plugin/models/:setting/import";
+    api.on(route, local);
+    const held = api.defer(route);
+    const promise = plugins.importModel(hall, voice, setting, new File(["{}"], "synthetic.json"), new File(["synthetic"], "synthetic.tflite"));
+    const refusal = expect(promise).rejects.toThrow("The model list changed during upload");
+    plugins.forgetDrafts(hall, voice);
+    held.resolve();
+    await refusal;
+    expect(plugins.modelsOn(hall, voice, setting)).toEqual([alisa]);
+    expect(api.count("POST screens/:id/plugins")).toBe(0);
+  });
 
   it("starts empty and gates every fresh target, while draft edits send nothing", async () => {
     const { api, plugins } = await loaded([voice]);

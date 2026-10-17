@@ -6,6 +6,7 @@ is pure; downloads use the plugin fetcher's public-only resolver, never HA crede
 import copy
 import hashlib
 import errno
+import fcntl
 import json
 import math
 import os
@@ -25,6 +26,9 @@ MAX_TOTAL_BYTES = 8 * 1024 * 1024
 SNAPSHOT_DIR = '.tessera-models'
 SNAPSHOT_FILES = ('source.json', 'manifest.json', 'model.tflite')
 DIGEST = re.compile(r'^[0-9a-f]{64}$')
+IMPORT_DIR = '.imports'
+UPLOAD = re.compile(r'^[0-9a-f]{32}$')
+IMPORTED_ID = re.compile(r'^ww_[0-9a-f]{24}$')
 
 
 class ModelError(ValueError):
@@ -39,44 +43,56 @@ def validate_url(url):
         raise ModelError(str(error)) from error
 
 
-def validate_requested(spec, requested, previous=None):
-    """Validate an API list without downloads or writes.
+def model_source(entry):
+    """Project a resolved server record back to its exclusive request source."""
+    key = 'upload' if 'upload' in entry else 'url'
+    return {'id': entry['id'], key: entry[key]}
 
-    With previous=None this is structural planning only. Passing a list (even [])
-    additionally checks ID ownership against that trusted same-origin history.
-    New catalogue URLs resolve to their declared ID, including pasted URLs.
-    Existing identities survive later catalogue additions, removals or retargeting.
-    """
+
+def validate_requested(spec, requested, previous=None, *, root=None):
+    """Validate source shape; Apply additionally checks identities against stored sources."""
     if not isinstance(requested, list) or len(requested) > MAX_MODELS:
         raise ModelError(f'Choose at most {MAX_MODELS} wake models')
     catalogue = {entry['url']: entry['id'] for entry in spec.get('catalogue', [])}
     trusted = {}
     for entry in previous or []:
         if isinstance(entry, dict) and isinstance(entry.get('id'), str):
-            trusted.setdefault(entry['id'], set()).add(entry.get('url'))
-    urls, ids, out = set(), set(), []
+            key = 'upload' if 'upload' in entry else 'url'
+            trusted.setdefault(entry['id'], set()).add((key, entry.get(key)))
+    sources, ids, out = set(), set(), []
     for entry in requested:
-        if not isinstance(entry, dict) or set(entry) - {'id', 'url'} or 'url' not in entry:
-            raise ModelError('Each wake model must contain only a URL and an optional existing ID')
-        url = entry['url']
-        validate_url(url)
+        if (not isinstance(entry, dict) or set(entry) - {'id', 'url', 'upload'}
+                or ('url' in entry) == ('upload' in entry)):
+            raise ModelError('Each wake model must contain a URL or upload token and an optional existing ID')
+        key = 'upload' if 'upload' in entry else 'url'
+        source = entry[key]
+        if key == 'url':
+            validate_url(source)
+        elif not isinstance(source, str) or not UPLOAD.fullmatch(source):
+            raise ModelError('Invalid wake model upload token')
         model_id = entry.get('id')
         if 'id' in entry and (not isinstance(model_id, str) or not ID.fullmatch(model_id)):
             raise ModelError('Invalid wake model ID')
-        if (model_id is not None and previous is not None and catalogue.get(url) != model_id
-                and url not in trusted.get(model_id, set())):
-            raise ModelError('A wake model ID must belong to an existing model with the same URL')
-        if model_id is None:
-            historical = next((item for item in previous or [] if item.get('url') == url), None)
-            model_id = (historical or {}).get('id') or catalogue.get(url)
-        if url in urls:
-            raise ModelError('The same wake model URL was added twice')
+        if key == 'upload' and root is not None:
+            registered = _read_import(root, source)
+            if model_id is not None and model_id != registered['id']:
+                raise ModelError('A wake model ID must belong to the registered upload')
+            model_id = registered['id']
+        elif key == 'url':
+            if (model_id is not None and previous is not None and catalogue.get(source) != model_id
+                    and (key, source) not in trusted.get(model_id, set())):
+                raise ModelError('A wake model ID must belong to an existing model with the same URL')
+            if model_id is None:
+                historical = next((item for item in previous or [] if item.get('url') == source), None)
+                model_id = (historical or {}).get('id') or catalogue.get(source)
+        if (key, source) in sources:
+            raise ModelError('The same wake model source was added twice')
         if model_id is not None and model_id in ids:
             raise ModelError('The same wake model ID was added twice')
-        urls.add(url)
+        sources.add((key, source))
         if model_id is not None:
             ids.add(model_id)
-        out.append({'id': model_id, 'url': url} if model_id is not None else {'url': url})
+        out.append({'id': model_id, key: source} if model_id is not None else {key: source})
     return out
 
 
@@ -293,6 +309,91 @@ def _publish_snapshot(root, source, model, original):
         if root_fd is not None:
             os.close(root_fd)
 
+def _import_record(directory, token):
+    if not isinstance(token, str) or not UPLOAD.fullmatch(token):
+        raise ModelError('Invalid wake model upload token')
+    try:
+        record = json.loads(_read_file(directory, token + '.json', 1024),
+                            object_pairs_hook=_json_object)
+    except (ValueError, UnicodeError) as error:
+        raise ModelError('Invalid wake model import registry') from error
+    if (not isinstance(record, dict) or set(record) != {'id', 'snapshot'}
+            or not isinstance(record['id'], str) or not IMPORTED_ID.fullmatch(record['id'])):
+        raise ModelError('Invalid wake model import registry')
+    _snapshot_digest(record['snapshot'])
+    return record
+
+
+def _read_import(root, token):
+    root_fd = assets_fd = imports_fd = None
+    try:
+        root_fd = _open_directory(Path(root))
+        assets_fd = _open_directory(SNAPSHOT_DIR, dir_fd=root_fd)
+        imports_fd = _open_directory(IMPORT_DIR, dir_fd=assets_fd)
+        return _import_record(imports_fd, token)
+    except OSError as error:
+        raise ModelError('Unknown or unreadable wake model upload') from error
+    finally:
+        for fd in (imports_fd, assets_fd, root_fd):
+            if fd is not None:
+                os.close(fd)
+
+
+def _resolved_upload(root, token, spec, record=None):
+    record = record if record is not None else _read_import(root, token)
+    files = verify_snapshot(root, record['snapshot'])
+    _, metadata = parse_manifest(files['source.json'], spec['feature_step_size'])
+    return {**record, 'upload': token, 'label': metadata['wake_word'],
+            'model_bytes': len(files['model.tflite']),
+            'feature_step_size': metadata['micro']['feature_step_size']}
+
+
+def import_model(spec, source, model, root):
+    """Register a private pair without fetching its reference or changing installed models."""
+    original, _ = parse_manifest(source, spec['feature_step_size'])
+    _check_binary(model)
+    digest = _publish_snapshot(root, source, model, original)
+    root_fd = assets_fd = imports_fd = None
+    temporary = None
+    try:
+        root_fd = _open_directory(Path(root))
+        assets_fd = _open_directory(SNAPSHOT_DIR, dir_fd=root_fd)
+        try:
+            os.mkdir(IMPORT_DIR, mode=0o700, dir_fd=assets_fd)
+        except FileExistsError:
+            pass
+        imports_fd = _open_directory(IMPORT_DIR, dir_fd=assets_fd)
+        fcntl.flock(imports_fd, fcntl.LOCK_EX)
+        for name in os.listdir(imports_fd):
+            if name.endswith('.json') and UPLOAD.fullmatch(name[:-5]):
+                record = _import_record(imports_fd, name[:-5])
+                if record['snapshot'] == digest:
+                    return _resolved_upload(root, name[:-5], spec, record)
+        token = uuid.uuid4().hex
+        record = {'id': 'ww_' + uuid.uuid4().hex[:24], 'snapshot': digest}
+        name = '.tmp-' + uuid.uuid4().hex
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=imports_fd)
+        temporary = name
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write((json.dumps(record, sort_keys=True) + '\n').encode('utf-8'))
+            stream.flush()
+            os.fsync(stream.fileno())
+        # A hard-link publication never overwrites an existing token, even on collision.
+        os.link(temporary, token + '.json', src_dir_fd=imports_fd, dst_dir_fd=imports_fd,
+                follow_symlinks=False)
+        os.fsync(imports_fd)
+        return _resolved_upload(root, token, spec, record)
+    except OSError as error:
+        raise ModelError('Cannot safely store wake model import') from error
+    finally:
+        if temporary is not None and imports_fd is not None:
+            os.unlink(temporary, dir_fd=imports_fd)
+        for fd in (imports_fd, assets_fd, root_fd):
+            if fd is not None:
+                os.close(fd)
+
+
 
 async def _download(fetcher, url, limit):
     host = validate_url(url)
@@ -312,13 +413,15 @@ async def resolve_models(spec, requested, previous, fetcher, root):
     the screen mutation lock and commits no records/sidecar until this returns.
     """
     previous = previous or []
-    requested = validate_requested(spec, requested, previous)
+    requested = validate_requested(spec, requested, previous, root=root)
     resolved, total, used_ids = [], 0, set()
     for request in requested:
-        url, model_id = request['url'], request.get('id')
-        old = next((entry for entry in previous if entry.get('url') == url
+        url, model_id = request.get('url'), request.get('id')
+        old = next((entry for entry in previous if url is not None and entry.get('url') == url
                     and (model_id is None or entry.get('id') == model_id) and entry.get('snapshot')), None)
-        if old is not None:
+        if 'upload' in request:
+            entry = _resolved_upload(root, request['upload'], spec)
+        elif old is not None:
             files = verify_snapshot(root, old['snapshot'])
             _, metadata = parse_manifest(files['source.json'], spec['feature_step_size'])
             entry = {'id': old['id'], 'url': url, 'snapshot': old['snapshot'],
