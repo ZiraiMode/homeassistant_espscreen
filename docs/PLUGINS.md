@@ -173,6 +173,8 @@ before plugin API 0.6, so older plugins keep working.
 five options, a dropdown from six on, at most 48), a text (`text.set_value`, within the entity's min and max length,
 hidden when its mode is password) and a button (`button.press`). A button's `status` names a text sensor the row shows
 beside it, read again a few times after a press, so a test can say how it went. A status is only shown, never set.
+Choice controls wrap below their label when the row is narrow. Options and long names wrap within the control,
+including third-party wake model names, rather than widening the settings card.
 
 A select may have no chosen value, reported by Home Assistant as `unknown`. If the screen is online and offers
 options, the row remains usable for an explicit choice and shows none as selected. The app never selects a

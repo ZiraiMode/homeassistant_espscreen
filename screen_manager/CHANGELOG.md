@@ -1,5 +1,8 @@
 ## Unreleased
 
+- **Plugin settings: keep wake phrase choices inside the card.** Choice controls move below their description when
+  space is tight; multiple options and long model names wrap without clipping or horizontal overflow.
+
 - **Wake models: import private files from the editor.** Add a microWakeWord JSON manifest and its TFLite file from
   your computer without publishing either file. Upload only adds a draft; Apply builds the chosen set once.
   Existing models and Wake phrase selections are preserved, and identical uploads keep the same model identity.
