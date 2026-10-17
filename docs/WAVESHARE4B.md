@@ -69,6 +69,10 @@ The shared `audio_half_duplex` component keeps logical microphone listeners sepa
 Playback waits for capture to stop, and capture resumes for the listeners that still need it after playback drains.
 The Voice assistant plugin finishes its optional wake sound before recording a question, then keeps wake detection
 paused through the native request and spoken reply. It resumes detection without toggling Wake word after each turn.
+Once both playback roots have stopped, the transport gracefully finishes physical output instead of retaining its
+silent idle tail. The amplifier is muted before the clock stops. Active playback is never cut short for this handoff.
+The tile shows Preparing during the wake sound and startup, then Listening when the native recording path is ready.
+Speak after the wake sound has ended; this half-duplex configuration cannot record speech while that sound plays.
 
 Audio and end-to-end Assist still require physical acceptance. The target is ordinary speech about one metre from
 the panel in a quiet room, not far-field use or speech over a television. The AXP2101's ALDO1 rail supplies the analog

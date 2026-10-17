@@ -1,5 +1,6 @@
 """Serialize physical capture/playback without changing logical microphone clients."""
 
+from esphome import automation
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import audio, microphone, speaker
@@ -20,6 +21,10 @@ ns = cg.esphome_ns.namespace("audio_half_duplex")
 AudioHalfDuplex = ns.class_("AudioHalfDuplex", cg.Component)
 MicrophoneProxy = ns.class_("MicrophoneProxy", microphone.Microphone)
 SpeakerProxy = ns.class_("SpeakerProxy", speaker.Speaker)
+
+CONF_PLAYBACK_SOURCES = "playback_sources"
+CONF_PLAYBACK_SOURCES_ID = "playback_sources_id"
+CONF_ON_PLAYBACK_STOPPING = "on_playback_stopping"
 
 
 def _stream_limits(config):
@@ -45,6 +50,13 @@ CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(AudioHalfDuplex),
+            cv.Required(CONF_PLAYBACK_SOURCES): cv.All(
+                cv.ensure_list(cv.use_id(speaker.Speaker)), cv.Length(min=1)
+            ),
+            cv.GenerateID(CONF_PLAYBACK_SOURCES_ID): cv.declare_id(
+                speaker.Speaker.operator("const_ptr")
+            ),
+            cv.Optional(CONF_ON_PLAYBACK_STOPPING): automation.validate_automation({}),
             cv.Required(CONF_MICROPHONE): cv.All(
                 microphone.MICROPHONE_SCHEMA.extend(STREAM_SCHEMA).extend(
                     {
@@ -93,6 +105,18 @@ async def to_code(config):
     await speaker.register_speaker(out, config[CONF_SPEAKER])
     cg.add(var.set_microphone(await cg.get_variable(config[CONF_MICROPHONE][CONF_MICROPHONE])))
     cg.add(var.set_speaker(await cg.get_variable(config[CONF_SPEAKER][CONF_SPEAKER])))
+    sources = [await cg.get_variable(source) for source in config[CONF_PLAYBACK_SOURCES]]
+    source_table = cg.static_const_array(config[CONF_PLAYBACK_SOURCES_ID], sources)
+    cg.add(var.set_playback_sources(source_table, len(sources)))
+    await automation.build_callback_automations(
+        var,
+        config,
+        (
+            automation.CallbackAutomation(
+                CONF_ON_PLAYBACK_STOPPING, "add_on_playback_stopping_callback"
+            ),
+        ),
+    )
     # Available before setup priorities run: microphone sources may inspect their
     # stream in another component's setup(), before this coordinator's setup().
     for kind, setter in (

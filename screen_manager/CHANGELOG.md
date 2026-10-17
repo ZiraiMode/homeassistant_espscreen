@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Voice audio: release the bus after the wake sound, not after an idle timeout.** Half-duplex audio now waits for
+  every playback source to complete, then gracefully closes the physical output immediately. Other active audio
+  sources and in-flight DMA still finish normally. The amplifier is muted before its clock stops, and the assistant
+  shows Preparing until native recording actually starts instead of showing Listening during the wake sound.
+
 - **Voice audio: keep listening after sounds.** Half-duplex boards preserve every microphone listener while the
   speaker owns the bus, wait for capture to release it before playback, and resume current listeners after output
   drains. The Voice assistant plugin completes its wake sound before recording and resumes wake detection only

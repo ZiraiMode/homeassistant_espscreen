@@ -48,6 +48,13 @@ class AudioHalfDuplex : public Component {
   AudioHalfDuplex() : microphone_(this), speaker_(this) {}
   void set_microphone(microphone::Microphone *mic) { this->raw_microphone_ = mic; }
   void set_speaker(speaker::Speaker *speaker) { this->raw_speaker_ = speaker; }
+  void set_playback_sources(const speaker::Speaker *const *sources, size_t count) {
+    this->playback_sources_ = sources;
+    this->playback_source_count_ = count;
+  }
+  template<typename F> void add_on_playback_stopping_callback(F &&callback) {
+    this->playback_stopping_callbacks_.add(std::forward<F>(callback));
+  }
   void set_microphone_stream(uint8_t bits, uint8_t channels, uint32_t rate) {
     this->microphone_.audio_stream_info_ = audio::AudioStreamInfo(bits, channels, rate);
   }
@@ -68,11 +75,16 @@ class AudioHalfDuplex : public Component {
   void request_playback_();  // mutex held
   void close_playback_(Close close);  // mutex held
   void update_states_();  // mutex held
+  bool loop_();  // mutex held; true requests the unlocked stopping callback
+  bool playback_sources_stopped_() const;  // mutex held
 
   MicrophoneProxy microphone_;
   SpeakerProxy speaker_;
   microphone::Microphone *raw_microphone_{nullptr};
   speaker::Speaker *raw_speaker_{nullptr};
+  const speaker::Speaker *const *playback_sources_{nullptr};
+  size_t playback_source_count_{0};
+  CallbackManager<void()> playback_stopping_callbacks_;
 
   // Ownership invariant: only loop() calls native start/stop/finish. Logical mic
   // clients own this count, never native semaphore references. The coordinator
@@ -88,6 +100,10 @@ class AudioHalfDuplex : public Component {
   bool microphone_reference_{false};
   bool playback_requested_{false};
   bool speaker_seen_started_{false};
+  bool playback_source_seen_active_{false};
+  bool playback_sources_were_stopped_{true};
+  bool stopping_callback_started_{false};
+  bool stopping_callback_done_{false};
   bool speaker_stop_sent_{false};
   uint8_t speaker_stop_wait_{0};
   bool ready_{false};

@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # Host-only interfaces; the arbitration algorithm is the production .cpp, not a
@@ -113,11 +115,44 @@ class Speaker {
 
 @unittest.skipUnless(shutil.which("g++"), "needs the host C++ compiler")
 class AudioHalfDuplexHost(unittest.TestCase):
+    def test_root_sources_and_amplifier_close_binding(self):
+        transport = yaml.safe_load(
+            (ROOT / "packages/features/audio-half-duplex.yaml").read_text()
+        )["audio_half_duplex"]
+        self.assertEqual(transport["playback_sources"], ["ts_speaker", "ts_media_speaker"])
+        amplifier = yaml.safe_load(
+            (ROOT / "packages/features/audio-amplifier.yaml").read_text()
+        )["audio_half_duplex"]
+        self.assertEqual(
+            amplifier["on_playback_stopping"],
+            [{"switch.turn_off": "${AUDIO_AMPLIFIER}"}],
+        )
+
     def test_production_transport(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             common = root / "interfaces.h"
             common.write_text(INTERFACES)
+            # Execute the actual amplifier interval lambda as well as the
+            # transport. Only ESPHome's id()/millis() names are adapted to host.
+            amplifier = yaml.safe_load(
+                (ROOT / "packages/features/audio-amplifier.yaml").read_text()
+            )
+            interval = amplifier["interval"][0]["then"][0]["lambda"]
+            interval = interval.replace("id(ts_speaker_out)", "speaker")
+            interval = interval.replace("id(${AUDIO_AMPLIFIER})", "amplifier")
+            (root / "amplifier_interval.h").write_text(
+                "struct TestAmplifier {\n"
+                "  bool state{false};\n"
+                "  void turn_on() { state = true; }\n"
+                "  void turn_off() { state = false; }\n"
+                "};\n"
+                "inline void amplifier_interval("
+                "audio_half_duplex::SpeakerProxy &speaker, "
+                "TestAmplifier &amplifier, uint32_t clock) {\n"
+                "  auto millis = [clock]() { return clock; };\n"
+                + interval + "\n}\n"
+            )
             for name in (
                 "esphome/components/microphone/microphone.h",
                 "esphome/components/speaker/speaker.h",

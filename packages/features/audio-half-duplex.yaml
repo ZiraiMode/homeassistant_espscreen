@@ -2,6 +2,9 @@
 # every listener and the mixer use these proxies, including readers joining during playback.
 audio_half_duplex:
   id: ts_audio_transport
+  # Complete root STOPPED states, not momentarily empty downstream buffers,
+  # release the bus as soon as all playback has finished.
+  playback_sources: [ts_speaker, ts_media_speaker]
   microphone:
     id: ts_microphone
     microphone: ts_microphone_raw

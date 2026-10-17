@@ -53,20 +53,64 @@ void AudioHalfDuplex::update_states_() {
   }
 }
 
-void AudioHalfDuplex::loop() {
-  LockGuard lock(this->mutex_);
-  if (!this->ready_)
-    return;
+bool AudioHalfDuplex::playback_sources_stopped_() const {
+  for (size_t i = 0; i < this->playback_source_count_; ++i) {
+    if (!this->playback_sources_[i]->is_stopped())
+      return false;
+  }
+  return true;
+}
 
-  if (this->phase_ == Phase::TRANSMIT) {
-    if (!this->raw_speaker_->is_stopped())
-      this->speaker_seen_started_ = true;
-    if (this->close_ != Close::NONE || (this->speaker_seen_started_ && this->raw_speaker_->is_stopped()))
-      this->phase_ = Phase::STOP_SPEAKER;
+void AudioHalfDuplex::loop() {
+  {
+    LockGuard lock(this->mutex_);
+    if (!this->loop_())
+      return;
+  }
+  // Writer admission is already revoked and the proxy is STOPPING. Automations
+  // may queue a successor or change mic clients without holding our mutex.
+  this->playback_stopping_callbacks_.call();
+  LockGuard lock(this->mutex_);
+  this->stopping_callback_done_ = true;
+  this->loop_();
+}
+
+bool AudioHalfDuplex::loop_() {
+  if (!this->ready_)
+    return false;
+
+  if (this->phase_ == Phase::TRANSMIT || this->phase_ == Phase::STOP_SPEAKER) {
+    const bool sources_stopped = this->playback_sources_stopped_();
+    if (this->phase_ == Phase::TRANSMIT) {
+      if (!this->raw_speaker_->is_stopped()) {
+        this->speaker_seen_started_ = true;
+        if (!sources_stopped)
+          this->playback_source_seen_active_ = true;
+      }
+      // Root STOPPED includes worker and downstream source teardown; empty
+      // buffers alone do not. Require activity in this physical epoch so a
+      // queued source START that still reports STOPPED cannot finish it early.
+      if (this->close_ == Close::NONE && this->raw_speaker_->is_running() &&
+          this->playback_source_seen_active_ && sources_stopped && this->writers_ == 0)
+        this->close_playback_(Close::FINISH);
+      if (this->close_ != Close::NONE || (this->speaker_seen_started_ && this->raw_speaker_->is_stopped()))
+        this->phase_ = Phase::STOP_SPEAKER;
+    } else if (this->playback_sources_were_stopped_ && !sources_stopped) {
+      // A root can start while native FINISH is draining. Keep it as a successor
+      // even before its worker reaches proxy.start()/play(); never reopen TX
+      // admission in the closing epoch.
+      this->playback_requested_ = true;
+    }
+    this->playback_sources_were_stopped_ = sources_stopped;
   }
   if (this->phase_ == Phase::STOP_SPEAKER) {
     if (!this->speaker_stop_sent_) {
-      if (this->writers_ == 0) {
+      if (this->writers_ == 0 && !this->stopping_callback_started_) {
+        this->stopping_callback_started_ = true;
+        this->update_states_();
+        return true;
+      }
+      if (this->writers_ == 0 && this->stopping_callback_done_) {
         if (this->close_ == Close::FINISH)
           this->raw_speaker_->finish();
         else
@@ -75,7 +119,7 @@ void AudioHalfDuplex::loop() {
         this->speaker_stop_wait_ = 2;
       }
       this->update_states_();
-      return;
+      return false;
     }
     // ESPHome has no loop-priority API and may reorder active components. Skip
     // two coordinator passes so native has processed STOP even across a reorder.
@@ -83,14 +127,17 @@ void AudioHalfDuplex::loop() {
     if (this->speaker_stop_wait_ != 0) {
       --this->speaker_stop_wait_;
       this->update_states_();
-      return;
+      return false;
     }
     if (!this->raw_speaker_->is_stopped()) {
       this->update_states_();
-      return;
+      return false;
     }
     this->speaker_stop_sent_ = false;
     this->speaker_seen_started_ = false;
+    this->playback_source_seen_active_ = false;
+    this->stopping_callback_started_ = false;
+    this->stopping_callback_done_ = false;
     this->close_ = Close::NONE;
     this->phase_ = Phase::RECEIVE;
   }
@@ -120,6 +167,7 @@ void AudioHalfDuplex::loop() {
     }
   }
   this->update_states_();
+  return false;
 }
 
 void MicrophoneProxy::start() {
