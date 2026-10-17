@@ -14,15 +14,16 @@
 #   assistant; music plays on its own mixer input under them.
 #
 # A board whose microphone and speaker share one I2S bus sets `AUDIO_HALF_DUPLEX: "true"` and includes
-# features/audio-half-duplex.yaml: ESPHome lets the two take turns on a bus, never both at once. Its speaker then lets go
-# of the bus half a second after a sound, and the microphone lets go of it whenever the speaker wants it, for any sound,
-# and listens again after.
+# features/audio-half-duplex.yaml. Its transport pauses physical capture for playback without changing any listener's
+# ownership, and returns the bus only after native playback has drained and stopped.
 #
 # Only boards with PSRAM include it: the decoders and the buffers live there.
 substitutions:
   AUDIO_SAMPLE_RATE: "48000"
   AUDIO_HALF_DUPLEX: "false"
   AUDIO_MIC_BUS: ts_mic_bus
+  AUDIO_NATIVE_MICROPHONE_ID: ${ "ts_microphone_raw" if (AUDIO_HALF_DUPLEX | string | lower) == "true" else "ts_microphone" }
+  AUDIO_NATIVE_SPEAKER_ID: ${ "ts_speaker_out_raw" if (AUDIO_HALF_DUPLEX | string | lower) == "true" else "ts_speaker_out" }
   # The volume as ears hear it: Home Assistant's 0 to 100 % runs evenly in decibels, from AUDIO_VOLUME_DB_LOW (5 % is
   # just audible beside the screen) to AUDIO_VOLUME_DB_HIGH (the DAC's full scale, without a digital gain that clips);
   # 0 % mutes. The media player maps its volume onto that part of the DAC's range (volume_min and volume_max below).
@@ -51,7 +52,7 @@ substitutions:
 
 microphone:
   - platform: i2s_audio
-    id: ts_microphone
+    id: ${AUDIO_NATIVE_MICROPHONE_ID}
     i2s_audio_id: ${AUDIO_MIC_BUS}
     i2s_din_pin: ${AUDIO_DIN_PIN}
     adc_type: external
@@ -77,7 +78,7 @@ switch:
 speaker:
   # The DAC, the one speaker that reaches the glass's loudspeaker.
   - platform: i2s_audio
-    id: ts_speaker_out
+    id: ${AUDIO_NATIVE_SPEAKER_ID}
     i2s_audio_id: ts_speaker_bus
     i2s_dout_pin: ${AUDIO_DOUT_PIN}
     dac_type: external

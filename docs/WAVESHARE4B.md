@@ -65,6 +65,11 @@ profile provides without another hardware plugin. Assist and wake words are not 
 Use an existing Home Assistant Assist pipeline with speech recognition, a conversation agent and speech synthesis.
 There is no echo cancellation, stereo capture, two-microphone beamforming or listening during playback.
 
+The shared `audio_half_duplex` component keeps logical microphone listeners separate from physical bus ownership.
+Playback waits for capture to stop, and capture resumes for the listeners that still need it after playback drains.
+The Voice assistant plugin finishes its optional wake sound before recording a question, then keeps wake detection
+paused through the native request and spoken reply. It resumes detection without toggling Wake word after each turn.
+
 Audio and end-to-end Assist still require physical acceptance. The target is ordinary speech about one metre from
 the panel in a quiet room, not far-field use or speech over a television. The AXP2101's ALDO1 rail supplies the analog
 audio circuitry; its availability after a true cold USB start must be checked. The profile does not write guessed

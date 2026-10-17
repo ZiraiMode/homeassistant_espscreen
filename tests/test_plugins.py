@@ -2040,6 +2040,22 @@ class PanelSettings(unittest.IsolatedAsyncioTestCase):
             with self.subTest(entity), self.assertRaises(ValueError):
                 await service.set_setting('kitchen', entity, value)
 
+    def test_unselected_phrase_keeps_explicit_choices_available(self):
+        entity = 'select.kitchen_wake_word'
+        state = {'state': 'unknown', 'attributes': {'options': ['Алиса']}}
+        service, calls = self.service([self.esphome(entity, 'Wake word')], {entity: state})
+        selected = service.settings_for('kitchen')[0]['rows'][0]
+        self.assertTrue(selected['available'])
+        self.assertIsNone(selected['value'])
+        self.assertEqual(selected['options'], ['Алиса'])
+        self.assertEqual(calls, [], 'listing choices must not select a replacement')
+        for value, options, online in [('unavailable', ['Алиса'], True),
+                                       ('unknown', [], True), ('unknown', ['Алиса'], False)]:
+            with self.subTest(value=value, options=options, online=online):
+                state.update(state=value, attributes={'options': options})
+                service.manager.screen = lambda inbox: {'id': inbox, 'device_id': 'dev1', 'online': online}
+                self.assertFalse(service.settings_for('kitchen')[0]['rows'][0]['available'])
+
     def test_the_object_id_is_esphomes(self):
         import plugins as plugin_service
         for name, key in (('Tap sound', 'tap_sound'), ('Mic gain (dB)', 'mic_gain__db_'), ('AEC', 'aec'), ('Wake-word', 'wake-word')):

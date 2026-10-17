@@ -174,6 +174,10 @@ five options, a dropdown from six on, at most 48), a text (`text.set_value`, wit
 hidden when its mode is password) and a button (`button.press`). A button's `status` names a text sensor the row shows
 beside it, read again a few times after a press, so a test can say how it went. A status is only shown, never set.
 
+A select may have no chosen value, reported by Home Assistant as `unknown`. If the screen is online and offers
+options, the row remains usable for an explicit choice and shows none as selected. The app never selects a
+replacement automatically. An unavailable entity, offline screen or empty option list stays disabled.
+
 ### Wake models installed through the editor
 
 A plugin can declare a `build_settings` entry of kind `micro_wake_word_models`. Its `target` names its

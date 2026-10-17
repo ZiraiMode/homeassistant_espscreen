@@ -26,6 +26,11 @@ Both entries of every board are written from `boards.yaml` by `tools/generate_en
 fails when one is out of date), so neither is edited by hand. The old profiles in the root of the repository are gone
 (app 0.2.129); a build from a checkout names `checkout/<board>.yaml`.
 
+Remote entries take components and fonts from `GITHUB_REPOSITORY` (default `MaxGramser/homeassistant_espscreen`)
+and `GITHUB_REF` (default `main`). When testing a fork, set both substitutions in the screen's own YAML to match
+the repository and revision of its `packages.display` entry. Changing only that package's URL does not move its
+external components or fonts. Checkout entries continue to use local files.
+
 A board file reads like this (the 4-inch Guition, without its comments):
 
 ```yaml

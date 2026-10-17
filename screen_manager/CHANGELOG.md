@@ -1,5 +1,14 @@
 ## Unreleased
 
+- **Voice audio: keep listening after sounds.** Half-duplex boards preserve every microphone listener while the
+  speaker owns the bus, wait for capture to release it before playback, and resume current listeners after output
+  drains. The Voice assistant plugin completes its wake sound before recording and resumes wake detection only
+  after the native request and reply finish, including canceled and failed requests.
+
+- **Plugin settings: recover an unselected wake phrase in Tessera.** An online select with available options stays
+  usable when Home Assistant reports `unknown`. Choosing a model remains explicit; unavailable screens and empty
+  model lists do not offer a choice.
+
 - **Wake models: keep an owner's fork as the display package.** Installing a model no longer rejects a root
   `packages.display` that selects one catalogue board entry from a GitHub fork. The selected repository and ref stay
   unchanged; extra remote packages and conflicting manual models remain refused.

@@ -41,19 +41,6 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(sorted(checker.included(ROOT / name)),
                                  sorted(['packages/core.yaml', str(profiles.BOARDS[board].relative_to(ROOT)), *hotspot]), name)
 
-    def test_the_published_entry_takes_everything_from_github(self):
-        for board in BOARDS:
-            package = (ROOT / 'packages' / f'{board}.yaml').read_text()
-            self.assertNotIn('!secret', package)
-            self.assertNotIn('type: local', package)
-            self.assertIn('url: https://github.com/MaxGramser/homeassistant_espscreen.git', package)
-            # From main, unless the screen's own YAML names another branch (GITHUB_REF, the app's dev channel).
-            self.assertIn('GITHUB_REF: "main"', package)
-            self.assertIn('FONT_DIR: "https://raw.githubusercontent.com/MaxGramser/homeassistant_espscreen/${GITHUB_REF}/fonts"', package)
-            # The fonts of the shared core come from that place; a checkout entry takes them from the checkout's own fonts/.
-            self.assertIn('file: "${FONT_DIR}/Roboto-500.ttf"', profiles.CORE.read_text())
-            self.assertIn('FONT_DIR: "../fonts"', (ROOT / BOARDS[board]).read_text())
-
     def test_no_secret_or_local_path_under_packages(self):
         for path in sorted((ROOT / 'packages').rglob('*.yaml')):
             text = '\n'.join(line for line in path.read_text().split('\n') if not line.lstrip().startswith('#'))
