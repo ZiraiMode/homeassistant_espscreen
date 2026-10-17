@@ -1,5 +1,9 @@
 ## Unreleased
 
+- **Wake models: keep an owner's fork as the display package.** Installing a model no longer rejects a root
+  `packages.display` that selects one catalogue board entry from a GitHub fork. The selected repository and ref stay
+  unchanged; extra remote packages and conflicting manual models remain refused.
+
 - **Editor: wake model lists fit narrow screens.** Long model names and manifest URLs wrap within the plugin's
   setup card instead of widening it and pushing catalogue or Remove buttons off-screen.
 

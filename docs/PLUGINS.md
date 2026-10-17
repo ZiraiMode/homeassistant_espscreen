@@ -202,6 +202,9 @@ Models are kept as immutable snapshots under `.tessera-models/` beside the profi
 the referenced manifests and binaries, so a saved configuration does not depend on the original model host.
 The app must manage the profile and know the screen's network address. Conflicting manual microWakeWord
 models, VAD or component IDs in profile/Override YAML must be moved or adopted explicitly, never overwritten.
+The root profile's `packages.display` may point to an owner-selected GitHub fork. It must name exactly one known
+`packages/<board>.yaml` entry, with no extra remote files or inline components. That firmware source and its ref are
+left unchanged. This exception does not apply to remote extras in other package keys or in Override YAML.
 
 Build records distinguish requested and confirmed installed model sets. A queued build captures its root profile,
 plugins sidecar and exact plugin revisions for all its steps. A failed update restores the prior desired configuration

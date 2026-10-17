@@ -896,6 +896,35 @@ packages:
             merged.update(explicit)
             return merged
 
+        def is_board_display(key, package, path, depth):
+            # The root display package is the owner's firmware source, including a fork. This is not permission
+            # for arbitrary remote extras: it must be a single catalogue board entry with no inline components.
+            if path != profile or depth != 0 or key != 'display':
+                return False
+            fields = mapping(package, path)
+            if set(fields) - {'url', 'ref', 'refresh', 'file', 'files'}:
+                return False
+            source = fields.get('url')
+            if (not isinstance(source, yaml.ScalarNode)
+                    or not re.fullmatch(r'https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/?', source.value)
+                    or source.value.rstrip('/').rsplit('/', 1)[-1].removesuffix('.git') in {'.', '..'}):
+                return False
+            if ('file' in fields) == ('files' in fields):
+                return False
+            files = fields.get('files', fields.get('file'))
+            entries = files.value if isinstance(files, yaml.SequenceNode) else [files]
+            if len(entries) != 1:
+                return False
+            entry = entries[0]
+            if isinstance(entry, yaml.MappingNode):
+                fields = mapping(entry, path)
+                if set(fields) - {'path', 'vars'}:
+                    return False
+                entry = fields.get('path')
+            return (isinstance(entry, yaml.ScalarNode) and entry.tag == 'tag:yaml.org,2002:str'
+                    and entry.value.startswith('packages/') and entry.value in SHAPES)
+
+
         def inspect(path, depth=0):
             nonlocal total, count
             if path == sidecar:
@@ -955,7 +984,9 @@ packages:
                         conflict(path, 'packages.' + key)
                     remote = mapping(package, path).get('url')
                     if remote is not None:
-                        if not isinstance(remote, yaml.ScalarNode) or remote.value.removesuffix('.git') != REPO.removesuffix('.git'):
+                        if (not isinstance(remote, yaml.ScalarNode)
+                                or (remote.value.removesuffix('.git') != REPO.removesuffix('.git')
+                                    and not is_board_display(key, package, path, depth))):
                             conflict(path, 'packages.' + key)
                         continue
                     inspect_config(package, path, depth + 1)

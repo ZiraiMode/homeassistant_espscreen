@@ -15,7 +15,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'screen_manager/app'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from firmware import Firmware  # noqa: E402
+from firmware import Firmware, LenientLoader  # noqa: E402
 
 HAS_AIOHTTP = importlib.util.find_spec('aiohttp') is not None
 if HAS_AIOHTTP:
@@ -171,6 +171,59 @@ class ManagedModelFiles(unittest.TestCase):
             profile.write_text(original.replace('packages:\n', 'packages:\n  owner:\n    url: https://example.com/unknown\n', 1))
             with self.assertRaisesRegex(ValueError, 'packages.owner'):
                 f.preflight_plugins('kitchen.yaml', self.sidecar())
+
+    def test_owner_selected_board_fork_accepts_models_without_changing_firmware_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.setup_firmware(tmp)
+            profile = f.profile('kitchen.yaml')
+            for files in ({'files': ['packages/waveshare4b.yaml']},
+                          {'files': [{'path': 'packages/waveshare4b.yaml', 'vars': {'LANGUAGE': 'en'}}]},
+                          {'file': 'packages/waveshare4b.yaml'}):
+                with self.subTest(files=files):
+                    package = {'url': 'https://github.com/Maker/ScreenFork.git', 'ref': 'audio-test',
+                               'refresh': '0s', **files}
+                    profile.write_text(yaml.safe_dump({'esphome': {'name': 'kitchen'}, 'packages': {'display': package}}))
+                    f.save_plugins('kitchen.yaml', self.sidecar())
+                    parsed = yaml.load(profile.read_text(), Loader=LenientLoader)
+                    self.assertEqual(parsed['packages']['display'], package)
+                    self.assertTrue(f.plugins_file('kitchen.yaml')['attached'])
+                    self.assertEqual(yaml.safe_load((f.root / 'kitchen.plugins.yaml').read_text())['micro_wake_word'],
+                                     {'id': 'va_wake', 'models': []})
+
+    def test_board_fork_exception_does_not_adopt_extra_or_overridden_remote_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.setup_firmware(tmp)
+            profile = f.profile('kitchen.yaml')
+            board = {'url': 'https://github.com/Maker/ScreenFork', 'ref': 'audio-test',
+                     'files': ['packages/waveshare4b.yaml']}
+            for package in ({**board, 'files': ['packages/waveshare4b.yaml', 'owner.yaml']},
+                            {**board, 'files': ['owner.yaml']},
+                            {**board, 'path': 'different-root'},
+                            {**board, 'micro_wake_word': {'models': []}},
+                            {**board, 'url': 'https://github.com/../ScreenFork'},
+                            {**board, 'url': 'https://example.org/ScreenFork'},
+                            {**board, 'url': 'https://github.com/Maker/ScreenFork#extra'}):
+                with self.subTest(package=package):
+                    profile.write_text(yaml.safe_dump({'esphome': {'name': 'kitchen'}, 'packages': {'display': package}}))
+                    before = profile.read_bytes()
+                    with self.assertRaisesRegex(ValueError, 'packages.display'):
+                        f.save_plugins('kitchen.yaml', self.sidecar())
+                    self.assertEqual(profile.read_bytes(), before)
+                    self.assertFalse((f.root / 'kitchen.plugins.yaml').exists())
+            profile.write_text(yaml.safe_dump({'esphome': {'name': 'kitchen'}, 'packages': {
+                'display': board, 'extra': board}}))
+            with self.assertRaisesRegex(ValueError, 'packages.extra'):
+                f.preflight_plugins('kitchen.yaml', self.sidecar())
+            profile.write_text(yaml.safe_dump({'esphome': {'name': 'kitchen'}, 'packages': {
+                'display': board, 'extra': {'packages': {'display': board}}}}))
+            with self.assertRaises(ValueError):
+                f.preflight_plugins('kitchen.yaml', self.sidecar())
+            profile.write_text(yaml.safe_dump({'esphome': {'name': 'kitchen'}, 'packages': {'display': board}}))
+            f.save_plugins('kitchen.yaml', self.sidecar())
+            with self.assertRaises(ValueError):
+                f.save_override('kitchen.yaml', yaml.safe_dump({'packages': {'display': board}}))
+            with self.assertRaisesRegex(ValueError, 'micro_wake_word.models'):
+                f.save_override('kitchen.yaml', 'micro_wake_word:\n  models: []\n')
 
     def test_merged_owned_fields_in_profile_and_override_are_rejected_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
