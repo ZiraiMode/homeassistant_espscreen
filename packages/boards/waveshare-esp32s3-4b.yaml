@@ -5,7 +5,7 @@
 # docs/WAVESHARE4B.md.
 #
 # The glass is the size of the 4-inch Guition's, so every size is the Guition's: the same tiles in millimetres,
-# the same six cells. The ES7210 microphone and ES8311 speaker share a mono, half-duplex audio bus.
+# the same six cells. The ES7210 microphone receives the clocks driven by the ES8311 speaker's I2S bus.
 # The battery charger (AXP2101), the motion sensor and the clock chip stay unused.
 #
 # A board file is the board's hardware, the facts the shared tree takes from it (its glass and its grid), and the
@@ -24,7 +24,6 @@ packages:
   audio_codec: !include ../hardware/audio-es8311.yaml
   audio: !include ../features/audio.yaml
   audio_amplifier: !include ../features/audio-amplifier.yaml
-  audio_half_duplex: !include ../features/audio-half-duplex.yaml
 
 substitutions:
   # The key of this board file; the firmware reports it so ESP Screens knows what board a screen is.
@@ -49,10 +48,9 @@ substitutions:
   # Hardware a screen's own YAML may change (docs/EASY_SETUP.md, "Hardware-specific YAML overrides")
   BACKLIGHT_FREQUENCY: "300000Hz"               # the backlight's PWM: an analog dim input behind a 160 Hz filter (below)
 
-  # One I2S bus for speech: capture and playback take turns at the same rate.
+  # Separate I2S ports capture and play together; the microphone follows the speaker's clocks.
   # The ES8311 DAC register maps 0 to -95.5 dB and 255 to +32 dB.
-  AUDIO_HALF_DUPLEX: "true"
-  AUDIO_MIC_BUS: ts_speaker_bus
+  AUDIO_MIC_MODE: secondary
   AUDIO_SAMPLE_RATE: "16000"
   AUDIO_DOUT_PIN: GPIO6
   AUDIO_DIN_PIN: GPIO15
@@ -94,8 +92,19 @@ pca9554:
 i2s_audio:
   - id: ts_speaker_bus
     i2s_mclk_pin: GPIO5
-    i2s_bclk_pin: GPIO16
-    i2s_lrclk_pin: GPIO7
+    i2s_bclk_pin:
+      number: GPIO16
+      allow_other_uses: true
+    i2s_lrclk_pin:
+      number: GPIO7
+      allow_other_uses: true
+  - id: ts_mic_bus
+    i2s_bclk_pin:
+      number: GPIO16
+      allow_other_uses: true
+    i2s_lrclk_pin:
+      number: GPIO7
+      allow_other_uses: true
 
 audio_adc:
   - platform: es7210

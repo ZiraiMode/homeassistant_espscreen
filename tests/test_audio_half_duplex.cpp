@@ -650,6 +650,37 @@ static void amplifier_waits_for_running_buffered_output() {
   f.until([&] { return f.mic->is_running(); });
 }
 
+static void amplifier_follows_sound_with_continuous_native_clock() {
+  Bus bus;
+  NativeSpeaker speaker(bus);
+  TestAmplifier amplifier;
+  amplifier_interval(speaker, amplifier, 3000);  // Clear the interval's previous hold.
+  speaker.start();
+  speaker.loop();
+  speaker.loop();
+  assert(speaker.is_running() && bus.tx);
+  amplifier_interval(speaker, amplifier, 3001);
+  assert(!amplifier.state);  // Silent boot clock must not enable the amplifier.
+
+  const uint8_t data[8]{};
+  assert(speaker.play(data, sizeof(data), 0) == sizeof(data));
+  amplifier_interval(speaker, amplifier, 3010);
+  assert(amplifier.state);
+  speaker.drain();
+  amplifier_interval(speaker, amplifier, 3309);
+  assert(amplifier.state);
+  amplifier_interval(speaker, amplifier, 3310);
+  assert(!amplifier.state && speaker.is_running() && bus.tx);
+
+  assert(speaker.play(data, sizeof(data), 0) == sizeof(data));
+  amplifier_interval(speaker, amplifier, 3400);
+  assert(amplifier.state && speaker.starts == 1);
+  speaker.drain();
+  amplifier_interval(speaker, amplifier, 3700);
+  assert(!amplifier.state && speaker.is_running());
+  assert(speaker.stops == 0 && speaker.finishes == 0);
+}
+
 int main() {
   for (const auto order : {LoopOrder::NATIVE_FIRST, LoopOrder::COORDINATOR_FIRST, LoopOrder::ALTERNATING}) {
     loop_order = order;
@@ -667,5 +698,6 @@ int main() {
     repeated_completed_root_cycles_are_stable();
     late_write_after_root_completion_keeps_successor();
     amplifier_waits_for_running_buffered_output();
+    amplifier_follows_sound_with_continuous_native_clock();
   }
 }

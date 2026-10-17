@@ -17,7 +17,7 @@ external_components:
   - source:
       type: local
       path: ../components
-    components: [audio_half_duplex, smart_display]
+    components: [smart_display]
 
 api:
   encryption:

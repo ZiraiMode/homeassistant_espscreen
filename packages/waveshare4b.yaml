@@ -24,4 +24,4 @@ external_components:
       ref: ${GITHUB_REF}
       path: components
     refresh: 0s
-    components: [audio_half_duplex, smart_display]
+    components: [smart_display]

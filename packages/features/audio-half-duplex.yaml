@@ -5,6 +5,8 @@ audio_half_duplex:
   # Complete root STOPPED states, not momentarily empty downstream buffers,
   # release the bus as soon as all playback has finished.
   playback_sources: [ts_speaker, ts_media_speaker]
+  on_playback_stopping:
+    - switch.turn_off: ${AUDIO_AMPLIFIER}
   microphone:
     id: ts_microphone
     microphone: ts_microphone_raw

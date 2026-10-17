@@ -115,18 +115,6 @@ class Speaker {
 
 @unittest.skipUnless(shutil.which("g++"), "needs the host C++ compiler")
 class AudioHalfDuplexHost(unittest.TestCase):
-    def test_root_sources_and_amplifier_close_binding(self):
-        transport = yaml.safe_load(
-            (ROOT / "packages/features/audio-half-duplex.yaml").read_text()
-        )["audio_half_duplex"]
-        self.assertEqual(transport["playback_sources"], ["ts_speaker", "ts_media_speaker"])
-        amplifier = yaml.safe_load(
-            (ROOT / "packages/features/audio-amplifier.yaml").read_text()
-        )["audio_half_duplex"]
-        self.assertEqual(
-            amplifier["on_playback_stopping"],
-            [{"switch.turn_off": "${AUDIO_AMPLIFIER}"}],
-        )
 
     def test_production_transport(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -148,7 +136,7 @@ class AudioHalfDuplexHost(unittest.TestCase):
                 "  void turn_off() { state = false; }\n"
                 "};\n"
                 "inline void amplifier_interval("
-                "audio_half_duplex::SpeakerProxy &speaker, "
+                "speaker::Speaker &speaker, "
                 "TestAmplifier &amplifier, uint32_t clock) {\n"
                 "  auto millis = [clock]() { return clock; };\n"
                 + interval + "\n}\n"

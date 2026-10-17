@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Waveshare 4B: record while the wake sound plays.** Separate native I2S controllers now use one shared clock
+  source for simultaneous recording and playback, instead of stopping the microphone for every sound. The Voice
+  assistant plugin starts capture before its cue and keeps wake inference warm on full-duplex boards, removing the
+  per-request model reload gap. Recognition accuracy and acoustic echo still require physical testing.
+
 - **Voice audio: release the bus after the wake sound, not after an idle timeout.** Half-duplex audio now waits for
   every playback source to complete, then gracefully closes the physical output immediately. Other active audio
   sources and in-flight DMA still finish normally. The amplifier is muted before its clock stops, and the assistant
@@ -7,8 +12,8 @@
 
 - **Voice audio: keep listening after sounds.** Half-duplex boards preserve every microphone listener while the
   speaker owns the bus, wait for capture to release it before playback, and resume current listeners after output
-  drains. The Voice assistant plugin completes its wake sound before recording and resumes wake detection only
-  after the native request and reply finish, including canceled and failed requests.
+  drains. On half-duplex boards the Voice assistant plugin completes its wake sound before recording and resumes
+  wake detection only after the native request and reply finish, including canceled and failed requests.
 
 - **Plugin settings: recover an unselected wake phrase in Tessera.** An online select with available options stays
   usable when Home Assistant reports `unknown`. Choosing a model remains explicit; unavailable screens and empty
@@ -28,7 +33,7 @@
   downloaded screen files, and queued builds retain their exact configuration across build and install steps.
 
 - **Waveshare ESP32-S3-Touch-LCD-4B: experimental audio configuration.** The board now includes its ES7210 microphone,
-  ES8311 speaker output and amplifier in the shared mono, 16 kHz half-duplex audio graph, with a Home Assistant
+  ES8311 speaker output and amplifier in the shared mono, 16 kHz full-duplex audio graph, with a Home Assistant
   Media Player and Volume/Microphone in Extras. Microphone starts off without a saved choice and restores subsequent
   choices. This is software mute, not a physical disconnect or cancellation of an ongoing answer. The profile requires
   ESPHome 2026.9.0 and provides the hardware capabilities needed by the optional Voice assistant plugin without

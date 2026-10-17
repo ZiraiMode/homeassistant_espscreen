@@ -41,7 +41,7 @@ The audio-enabled profile requires ESPHome **2026.9.0 or newer**.
 - Camera tiles, full-screen snapshots, live tile pictures, camera alerts and media artwork use the shared PSRAM implementation.
 - GT911 reports pixel coordinates, with no resistive calibration. The existing touch filter and action guard remain in use.
 - The ES7210 microphone input and ES8311 speaker output use the shared audio graph, with Volume and Microphone in
-  Extras. The speech path is mono, 16 kHz and half-duplex; capture pauses while sound plays.
+  Extras. The speech path is mono, 16 kHz, with simultaneous capture and playback.
 - The battery charger (AXP2101), the motion sensor and the clock chip stay unused. The screen runs from USB;
   a battery on the connector is neither read nor managed.
 
@@ -63,16 +63,18 @@ the profile does not start continuous capture.
 The separate **Voice assistant** plugin requires microphone, speaker and media player capabilities, which this
 profile provides without another hardware plugin. Assist and wake words are not built into the default firmware.
 Use an existing Home Assistant Assist pipeline with speech recognition, a conversation agent and speech synthesis.
-There is no echo cancellation, stereo capture, two-microphone beamforming or listening during playback.
+There is no echo cancellation, stereo capture or two-microphone beamforming. Simultaneous capture preserves speech
+during the wake sound; it does not remove that sound or a spoken reply from the microphone signal.
 
-The shared `audio_half_duplex` component keeps logical microphone listeners separate from physical bus ownership.
-Playback waits for capture to stop, and capture resumes for the listeners that still need it after playback drains.
-The Voice assistant plugin finishes its optional wake sound before recording a question, then keeps wake detection
-paused through the native request and spoken reply. It resumes detection without toggling Wake word after each turn.
-Once both playback roots have stopped, the transport gracefully finishes physical output instead of retaining its
-silent idle tail. The amplifier is muted before the clock stops. Active playback is never cut short for this handoff.
-The tile shows Preparing during the wake sound and startup, then Listening when the native recording path is ready.
-Speak after the wake sound has ended; this half-duplex configuration cannot record speech while that sound plays.
+The speaker uses one native I2S controller as the clock source and keeps its clocks running in silence. The microphone
+uses the other controller in secondary mode, following the same BCLK and LRCLK pins; only the speaker drives MCLK.
+The amplifier follows buffered audio and switches off during silence without stopping capture.
+
+On this full-duplex configuration, the Voice assistant plugin requests capture immediately after an accepted wake
+phrase or tap. Its optional wake sound starts when Home Assistant reports listening and does not delay recording.
+The wake detector keeps its frontend and model running between requests instead of reloading them after every reply.
+Detections during an active request or local cue do not start another request. Genuine detections still have the
+native model's cooldown, and recognition depends on the microphone signal and the selected model.
 
 Audio and end-to-end Assist still require physical acceptance. The target is ordinary speech about one metre from
 the panel in a quiet room, not far-field use or speech over a television. The AXP2101's ALDO1 rail supplies the analog
@@ -92,6 +94,7 @@ PMIC settings. A warm restart does not establish that cold-start audio works.
 - RGB: DE GPIO17, PCLK GPIO9, HSYNC GPIO46, VSYNC GPIO3, 16 MHz pixel clock, 18-bit pixel mode, inverted colours.
 - Backlight: GPIO4, PWM at 300 kHz, inverted, `min_power: 0.52` (duty 48 % at the dimmest), `zero_means_zero`, gamma 1.0.
 - Audio I2S: MCLK GPIO5, BCLK GPIO16, LRCLK GPIO7, speaker data GPIO6 and microphone data GPIO15.
+  The speaker controller is primary; the microphone controller is secondary and shares only the clock inputs.
   ES7210 is at I2C 0x40 with initial gain 24 dB; ES8311 is at 0x18. Mono capture uses the left channel.
   The common ES8311 setup lives in `packages/hardware/audio-es8311.yaml`; the board retains its bus and pin wiring.
 

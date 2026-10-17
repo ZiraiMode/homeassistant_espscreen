@@ -22,6 +22,7 @@ substitutions:
   AUDIO_SAMPLE_RATE: "48000"
   AUDIO_HALF_DUPLEX: "false"
   AUDIO_MIC_BUS: ts_mic_bus
+  AUDIO_MIC_MODE: primary
   AUDIO_NATIVE_MICROPHONE_ID: ${ "ts_microphone_raw" if (AUDIO_HALF_DUPLEX | string | lower) == "true" else "ts_microphone" }
   AUDIO_NATIVE_SPEAKER_ID: ${ "ts_speaker_out_raw" if (AUDIO_HALF_DUPLEX | string | lower) == "true" else "ts_speaker_out" }
   # The volume as ears hear it: Home Assistant's 0 to 100 % runs evenly in decibels, from AUDIO_VOLUME_DB_LOW (5 % is
@@ -54,6 +55,7 @@ microphone:
   - platform: i2s_audio
     id: ${AUDIO_NATIVE_MICROPHONE_ID}
     i2s_audio_id: ${AUDIO_MIC_BUS}
+    i2s_mode: ${AUDIO_MIC_MODE}
     i2s_din_pin: ${AUDIO_DIN_PIN}
     adc_type: external
     sample_rate: 16000

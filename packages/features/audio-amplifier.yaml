@@ -1,13 +1,7 @@
-# ESP Screens - a speaker amplifier that follows the sound, for a board file whose microphone and speaker share one I2S
-# bus (features/audio.yaml with AUDIO_HALF_DUPLEX): the Waveshare P4 86 panel, the M5Stack Tab5.
-#
-# The amplifier stays off while the speaker clock starts. It follows buffered sound with a 300 ms hold, but a completed
-# playback epoch mutes it immediately before the transport's graceful finish releases the clock. That hold never delays
-# microphone handoff. The board brings its enable as a switch (restore_mode: ALWAYS_OFF), named in AUDIO_AMPLIFIER.
-# A board whose speaker bus runs all the time keeps its amplifier on instead (the reTerminal D1001).
-audio_half_duplex:
-  on_playback_stopping:
-    - switch.turn_off: ${AUDIO_AMPLIFIER}
+# ESP Screens - a speaker amplifier that follows buffered sound with a 300 ms hold, including on a bus whose clock
+# runs continuously in silence. The board brings its enable as a switch (restore_mode: ALWAYS_OFF), named in
+# AUDIO_AMPLIFIER. Half-duplex boards additionally mute it before their transport releases the clock
+# (features/audio-half-duplex.yaml), without delaying microphone handoff.
 interval:
   - interval: 20ms
     then:
